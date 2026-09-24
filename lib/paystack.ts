@@ -8,7 +8,7 @@ export function makeReference(telegramId: number) {
 }
 
 export function placeholderEmail(telegramId: number) {
-  return `tg${telegramId}@members.invalid`;
+  return `tg${telegramId}@example.com`;
 }
 
 export async function initializeTransaction(params: {
