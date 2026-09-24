@@ -10,6 +10,18 @@ import { initializeTransaction, makeReference } from '@/lib/paystack';
 import { issueAccessLink } from '@/lib/processPayment';
 import { handleAdminCommand, ADMIN_COMMANDS } from '@/lib/admin';
 import { runDailyReconcile } from '@/lib/cron';
+import {
+  PROMPTS,
+  PROMPT_COMMANDS,
+  adminMenu,
+  sendForceReply,
+} from '@/lib/menus';
+import {
+  showMenu,
+  showHelp,
+  showStatus,
+  showPaySupport,
+} from '@/lib/userCommands';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
@@ -142,7 +154,10 @@ async function handleSubscribe(chatId: number, from: TgFrom) {
       ' for ' +
       plan.duration_days +
       ' days.\n\nTap the button to pay securely. Access is sent here after payment.',
-    [[{ text: 'Pay ₦' + amount.toLocaleString('en-NG'), url: result.authorizationUrl }]]
+    [
+      [{ text: 'Pay ₦' + amount.toLocaleString('en-NG'), url: result.authorizationUrl }],
+      [{ text: '⬅️ Menu', callback_data: 'menu' }],
+    ]
   );
 }
 
@@ -152,7 +167,7 @@ async function handleGetLink(chatId: number, from: TgFrom) {
     await sendMessage(
       chatId,
       'You do not have an active membership. Tap below to subscribe.',
-      [[{ text: 'Subscribe', callback_data: 'subscribe' }]]
+      [[{ text: '💳 Subscribe', callback_data: 'subscribe' }]]
     );
     return;
   }
@@ -215,6 +230,36 @@ async function handleRunCron(chatId: number) {
   );
 }
 
+async function showAdminMenu(chatId: number) {
+  await sendMessage(chatId, 'Admin Panel', adminMenu());
+}
+
+async function handleAdminButton(
+  data: string,
+  chatId: number,
+  adminId: number
+) {
+  if (data === 'admin_menu') {
+    await showAdminMenu(chatId);
+  } else if (data === 'a_stats') {
+    await handleAdminCommand(chatId, adminId, '/stats', []);
+    await showAdminMenu(chatId);
+  } else if (data === 'a_runcron') {
+    await handleRunCron(chatId);
+    await showAdminMenu(chatId);
+  } else if (data === 'a_member') {
+    await sendForceReply(chatId, PROMPTS.member);
+  } else if (data === 'a_grant') {
+    await sendForceReply(chatId, PROMPTS.grant);
+  } else if (data === 'a_extend') {
+    await sendForceReply(chatId, PROMPTS.extend);
+  } else if (data === 'a_revoke') {
+    await sendForceReply(chatId, PROMPTS.revoke);
+  } else if (data === 'a_price') {
+    await sendForceReply(chatId, PROMPTS.price);
+  }
+}
+
 export async function POST(req: Request) {
   const secret = req.headers.get('x-telegram-bot-api-secret-token');
   if (secret !== process.env.TELEGRAM_WEBHOOK_SECRET) {
@@ -232,12 +277,28 @@ export async function POST(req: Request) {
     if (update.callback_query) {
       const cb = update.callback_query;
       await answerCallbackQuery(cb.id);
-      if (cb.message && cb.from) {
+
+      if (cb.message && cb.from && cb.message.chat.type === 'private') {
         const chatId: number = cb.message.chat.id;
-        if (cb.data === 'subscribe') {
+        const data: string = cb.data ?? '';
+        const admin = isAdmin(cb.from.id);
+
+        if (data === 'subscribe') {
           await handleSubscribe(chatId, cb.from);
-        } else if (cb.data === 'get_link') {
+        } else if (data === 'get_link') {
           await handleGetLink(chatId, cb.from);
+        } else if (data === 'menu') {
+          await showMenu(chatId, admin);
+        } else if (data === 'status') {
+          await showStatus(chatId, cb.from.id, admin);
+        } else if (data === 'help') {
+          await showHelp(chatId, admin);
+        } else if (data === 'paysupport') {
+          await showPaySupport(chatId, cb.from.id);
+        } else if (data === 'admin_menu' || data.startsWith('a_')) {
+          if (admin) {
+            await handleAdminButton(data, chatId, cb.from.id);
+          }
         }
       }
       return NextResponse.json({ ok: true });
@@ -249,9 +310,30 @@ export async function POST(req: Request) {
       const chatId: number = message.chat.id;
       const chatType: string = message.chat.type;
       const from = message.from;
-      const parts: string[] = message.text.trim().split(/\s+/);
+      const text: string = message.text.trim();
+      const parts: string[] = text.split(/\s+/);
       const command = parts[0].split('@')[0].toLowerCase();
       const args = parts.slice(1);
+
+      // Admin answering a button prompt
+      const replyText: string | undefined = message.reply_to_message?.text;
+      if (
+        chatType === 'private' &&
+        from &&
+        isAdmin(from.id) &&
+        replyText &&
+        PROMPT_COMMANDS[replyText] &&
+        !text.startsWith('/')
+      ) {
+        await handleAdminCommand(
+          chatId,
+          from.id,
+          PROMPT_COMMANDS[replyText],
+          parts
+        );
+        await showAdminMenu(chatId);
+        return NextResponse.json({ ok: true });
+      }
 
       if (command === '/runcron') {
         if (chatType === 'private' && from && isAdmin(from.id)) {
@@ -263,15 +345,27 @@ export async function POST(req: Request) {
         }
       } else if (command === '/groupid') {
         await sendMessage(chatId, 'Chat ID: ' + chatId);
-      } else if (command === '/start' && chatType === 'private' && from) {
-        await upsertUser(from);
-        await sendMessage(
-          chatId,
-          'Welcome! Tap below to join the membership.',
-          [[{ text: 'Subscribe', callback_data: 'subscribe' }]]
-        );
-      } else if (command === '/subscribe' && chatType === 'private' && from) {
-        await handleSubscribe(chatId, from);
+      } else if (chatType === 'private' && from) {
+        const admin = isAdmin(from.id);
+        if (command === '/start') {
+          await upsertUser(from);
+          await sendMessage(
+            chatId,
+            'Welcome! Tap a button below to get started.',
+            [[{ text: '📋 Open Menu', callback_data: 'menu' }]]
+          );
+          await showMenu(chatId, admin);
+        } else if (command === '/subscribe') {
+          await handleSubscribe(chatId, from);
+        } else if (command === '/status') {
+          await showStatus(chatId, from.id, admin);
+        } else if (command === '/help') {
+          await showHelp(chatId, admin);
+        } else if (command === '/paysupport') {
+          await showPaySupport(chatId, from.id);
+        } else {
+          await showMenu(chatId, admin);
+        }
       }
     }
   } catch (e) {
