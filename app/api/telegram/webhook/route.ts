@@ -8,6 +8,7 @@ import {
 } from '@/lib/telegram';
 import { initializeTransaction, makeReference } from '@/lib/paystack';
 import { issueAccessLink } from '@/lib/processPayment';
+import { handleAdminCommand, ADMIN_COMMANDS } from '@/lib/admin';
 
 export const dynamic = 'force-dynamic';
 
@@ -228,9 +229,15 @@ export async function POST(req: Request) {
       const chatId: number = message.chat.id;
       const chatType: string = message.chat.type;
       const from = message.from;
-      const command = message.text.split(' ')[0].split('@')[0].toLowerCase();
+      const parts: string[] = message.text.trim().split(/\s+/);
+      const command = parts[0].split('@')[0].toLowerCase();
+      const args = parts.slice(1);
 
-      if (command === '/groupid') {
+      if (ADMIN_COMMANDS.includes(command)) {
+        if (chatType === 'private' && from && isAdmin(from.id)) {
+          await handleAdminCommand(chatId, from.id, command, args);
+        }
+      } else if (command === '/groupid') {
         await sendMessage(chatId, 'Chat ID: ' + chatId);
       } else if (command === '/start' && chatType === 'private' && from) {
         await upsertUser(from);

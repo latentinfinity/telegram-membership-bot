@@ -36,7 +36,7 @@ export async function answerCallbackQuery(callbackQueryId: string) {
 export async function createJoinRequestLink(params: {
   name: string;
   expireInHours: number;
-}): Promise<{ ok: true;link: string } | { ok: false;error: string }> {
+}): Promise < { ok: true;link: string } | { ok: false;error: string } > {
   try {
     const res = await fetch(endpoint('createChatInviteLink'), {
       method: 'POST',
@@ -82,4 +82,40 @@ export async function declineJoinRequest(userId: number) {
   });
   const json = await res.json();
   return json.ok === true;
+}
+
+export async function removeMember(
+  userId: number
+): Promise < { ok: true } | { ok: false;error: string } > {
+  try {
+    const chatId = Number(process.env.TELEGRAM_GROUP_ID);
+    
+    const banRes = await fetch(endpoint('banChatMember'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chat_id: chatId, user_id: userId }),
+    });
+    const banJson = await banRes.json();
+    if (!banJson.ok) {
+      return { ok: false, error: banJson.description ?? 'Ban failed' };
+    }
+    
+    const unbanRes = await fetch(endpoint('unbanChatMember'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chat_id: chatId,
+        user_id: userId,
+        only_if_is_banned: true,
+      }),
+    });
+    const unbanJson = await unbanRes.json();
+    if (!unbanJson.ok) {
+      return { ok: false, error: unbanJson.description ?? 'Unban failed' };
+    }
+    
+    return { ok: true };
+  } catch {
+    return { ok: false, error: 'Network error' };
+  }
 }
