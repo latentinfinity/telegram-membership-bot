@@ -1,11 +1,25 @@
 import { NextResponse } from 'next/server';
 import { createAdminClient } from '@/lib/supabase/admin';
-import { sendMessage, answerCallbackQuery } from '@/lib/telegram';
+import {
+  sendMessage,
+  answerCallbackQuery,
+  approveJoinRequest,
+  declineJoinRequest,
+} from '@/lib/telegram';
 import { initializeTransaction, makeReference } from '@/lib/paystack';
+import { issueAccessLink } from '@/lib/processPayment';
 
 export const dynamic = 'force-dynamic';
 
 type TgFrom = { id: number; username?: string };
+
+function isAdmin(telegramId: number) {
+  const ids = (process.env.TELEGRAM_ADMIN_IDS ?? '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+  return ids.includes(String(telegramId));
+}
 
 async function upsertUser(from: TgFrom) {
   const supabase = createAdminClient();
@@ -24,6 +38,30 @@ async function upsertUser(from: TgFrom) {
     .single();
   if (error) console.error('telegram_users upsert failed', error);
   return data;
+}
+
+async function findAccess(telegramId: number) {
+  const supabase = createAdminClient();
+
+  const { data: user } = await supabase
+    .from('telegram_users')
+    .select('id')
+    .eq('telegram_id', telegramId)
+    .maybeSingle();
+  if (!user) return null;
+
+  const { data: sub } = await supabase
+    .from('subscriptions')
+    .select('id, status, grace_ends_at')
+    .eq('telegram_user_id', user.id)
+    .eq('is_deleted', false)
+    .in('status', ['active', 'grace'])
+    .maybeSingle();
+
+  if (!sub) return null;
+  if (new Date(sub.grace_ends_at) <= new Date()) return null;
+
+  return { userId: user.id as string, subscriptionId: sub.id as string };
 }
 
 async function handleSubscribe(chatId: number, from: TgFrom) {
@@ -105,6 +143,57 @@ async function handleSubscribe(chatId: number, from: TgFrom) {
   );
 }
 
+async function handleGetLink(chatId: number, from: TgFrom) {
+  const access = await findAccess(from.id);
+  if (!access) {
+    await sendMessage(
+      chatId,
+      'You do not have an active membership. Tap below to subscribe.',
+      [[{ text: 'Subscribe', callback_data: 'subscribe' }]]
+    );
+    return;
+  }
+  await issueAccessLink({
+    telegramUserId: access.userId,
+    telegramId: from.id,
+    subscriptionId: access.subscriptionId,
+    intro: 'Here is your access link.',
+  });
+}
+
+async function handleJoinRequest(req: { chat: { id: number }; from: TgFrom }) {
+  if (String(req.chat.id) !== process.env.TELEGRAM_GROUP_ID) return;
+
+  const telegramId = req.from.id;
+
+  if (isAdmin(telegramId)) {
+    await approveJoinRequest(telegramId);
+    return;
+  }
+
+  const access = await findAccess(telegramId);
+
+  if (!access) {
+    await declineJoinRequest(telegramId);
+    console.log('join request declined for', telegramId);
+    return;
+  }
+
+  const approved = await approveJoinRequest(telegramId);
+
+  const supabase = createAdminClient();
+  await supabase.from('access_events').insert({
+    telegram_user_id: access.userId,
+    subscription_id: access.subscriptionId,
+    event_type: 'join_approved',
+    result: approved ? 'success' : 'failed',
+  });
+
+  if (approved) {
+    await sendMessage(telegramId, 'Approved. Welcome to the group!');
+  }
+}
+
 export async function POST(req: Request) {
   const secret = req.headers.get('x-telegram-bot-api-secret-token');
   if (secret !== process.env.TELEGRAM_WEBHOOK_SECRET) {
@@ -114,11 +203,21 @@ export async function POST(req: Request) {
   try {
     const update = await req.json();
 
+    if (update.chat_join_request) {
+      await handleJoinRequest(update.chat_join_request);
+      return NextResponse.json({ ok: true });
+    }
+
     if (update.callback_query) {
       const cb = update.callback_query;
       await answerCallbackQuery(cb.id);
-      if (cb.data === 'subscribe' && cb.message && cb.from) {
-        await handleSubscribe(cb.message.chat.id, cb.from);
+      if (cb.message && cb.from) {
+        const chatId: number = cb.message.chat.id;
+        if (cb.data === 'subscribe') {
+          await handleSubscribe(chatId, cb.from);
+        } else if (cb.data === 'get_link') {
+          await handleGetLink(chatId, cb.from);
+        }
       }
       return NextResponse.json({ ok: true });
     }
