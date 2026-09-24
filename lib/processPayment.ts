@@ -1,5 +1,6 @@
 import { createAdminClient } from '@/lib/supabase/admin';
 import { sendMessage, createJoinRequestLink } from '@/lib/telegram';
+import { isInGroup } from '@/lib/membership';
 
 export type ProcessResult =
   | { ok: true; alreadyProcessed: boolean }
@@ -41,6 +42,18 @@ export async function issueAccessLink(params: {
   intro: string;
 }) {
   const supabase = createAdminClient();
+
+  // Already in the group: no link needed, nothing to share
+  if (await isInGroup(params.telegramId)) {
+    const base =
+      params.intro === 'Here is your access link.' ? '' : params.intro + '\n\n';
+    await sendMessage(
+      params.telegramId,
+      base + 'You are already in the group, so no link is needed.',
+      [[{ text: '⬅️ Menu', callback_data: 'menu' }]]
+    );
+    return true;
+  }
 
   const link = await createJoinRequestLink({
     name: 'sub-' + params.telegramId,
