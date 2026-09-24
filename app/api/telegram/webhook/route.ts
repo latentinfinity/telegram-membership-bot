@@ -9,8 +9,10 @@ import {
 import { initializeTransaction, makeReference } from '@/lib/paystack';
 import { issueAccessLink } from '@/lib/processPayment';
 import { handleAdminCommand, ADMIN_COMMANDS } from '@/lib/admin';
+import { runDailyReconcile } from '@/lib/cron';
 
 export const dynamic = 'force-dynamic';
+export const maxDuration = 60;
 
 type TgFrom = { id: number; username?: string };
 
@@ -195,6 +197,24 @@ async function handleJoinRequest(req: { chat: { id: number }; from: TgFrom }) {
   }
 }
 
+async function handleRunCron(chatId: number) {
+  await sendMessage(chatId, 'Running the daily job...');
+  const s = await runDailyReconcile();
+  await sendMessage(
+    chatId,
+    'Done.' +
+      '\nPayments recovered: ' + s.paymentsRecovered +
+      '\nPending payments closed: ' + s.paymentsClosed +
+      '\nMoved to grace: ' + s.movedToGrace +
+      '\nExpired: ' + s.expired +
+      '\nRemoved from group: ' + s.removed +
+      '\nRemoval failed: ' + s.removalFailed +
+      '\nReminders sent: ' + s.reminders +
+      '\nRetries ok/failed: ' + s.retriesOk + '/' + s.retriesFailed +
+      (s.truncated ? '\nStopped early (time). Run again.' : '')
+  );
+}
+
 export async function POST(req: Request) {
   const secret = req.headers.get('x-telegram-bot-api-secret-token');
   if (secret !== process.env.TELEGRAM_WEBHOOK_SECRET) {
@@ -233,7 +253,11 @@ export async function POST(req: Request) {
       const command = parts[0].split('@')[0].toLowerCase();
       const args = parts.slice(1);
 
-      if (ADMIN_COMMANDS.includes(command)) {
+      if (command === '/runcron') {
+        if (chatType === 'private' && from && isAdmin(from.id)) {
+          await handleRunCron(chatId);
+        }
+      } else if (ADMIN_COMMANDS.includes(command)) {
         if (chatType === 'private' && from && isAdmin(from.id)) {
           await handleAdminCommand(chatId, from.id, command, args);
         }
