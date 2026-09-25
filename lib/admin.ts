@@ -12,6 +12,8 @@ export const ADMIN_COMMANDS = [
 ];
 
 const DAY = 86400000;
+const NOT_FOUND =
+  'Member not found. They must open the bot and tap Start at least once before you can use their username or ID.';
 
 type Sub = {
   id: string;
@@ -136,7 +138,7 @@ async function cmdMember(chatId: number, args: string[]) {
   }
   const user = await findUser(args[0]);
   if (!user) {
-    await sendMessage(chatId, 'Member not found. They must have started the bot.');
+    await sendMessage(chatId, NOT_FOUND);
     return;
   }
   const sub = await getLiveSub(user.id);
@@ -170,7 +172,7 @@ async function cmdExtend(chatId: number, adminId: number, args: string[]) {
   }
   const user = await findUser(args[0]);
   if (!user) {
-    await sendMessage(chatId, 'Member not found.');
+    await sendMessage(chatId, NOT_FOUND);
     return;
   }
   const sub = await getLiveSub(user.id);
@@ -208,7 +210,7 @@ async function cmdRevoke(chatId: number, adminId: number, args: string[]) {
   }
   const user = await findUser(args[0]);
   if (!user) {
-    await sendMessage(chatId, 'Member not found.');
+    await sendMessage(chatId, NOT_FOUND);
     return;
   }
   const sub = await getLiveSub(user.id);
@@ -266,10 +268,7 @@ async function cmdGrant(chatId: number, adminId: number, args: string[]) {
   }
   const user = await findUser(args[0]);
   if (!user) {
-    await sendMessage(
-      chatId,
-      'Member not found. They must send /start to the bot first.'
-    );
+    await sendMessage(chatId, NOT_FOUND);
     return;
   }
   const supabase = createAdminClient();
