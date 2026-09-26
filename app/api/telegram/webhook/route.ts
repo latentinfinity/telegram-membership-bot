@@ -14,6 +14,7 @@ import {
   PROMPTS,
   PROMPT_COMMANDS,
   adminMenu,
+  channelMenu,
   sendForceReply,
 } from '@/lib/menus';
 import {
@@ -37,6 +38,7 @@ import {
   parseSendAt,
   fmtLagos,
 } from '@/lib/scheduledPosts';
+import { getChannelConfig, setChannelId, setAd, setAdEnabled } from '@/lib/channel';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
@@ -249,8 +251,21 @@ async function showAdminMenu(chatId: number) {
   await sendMessage(chatId, 'Admin Panel', adminMenu());
 }
 
-async function handleScheduleStart(chatId: number, adminId: number) {
-  await startDraft(adminId);
+async function showChannelMenu(chatId: number) {
+  const cfg = await getChannelConfig();
+  await sendMessage(
+    chatId,
+    'Channel settings',
+    channelMenu(cfg?.ad_enabled ?? false, !!cfg?.channel_id)
+  );
+}
+
+async function handleScheduleStart(
+  chatId: number,
+  adminId: number,
+  destination: 'group' | 'channel'
+) {
+  await startDraft(adminId, destination);
   await sendMessage(
     chatId,
     'Send the photo for this post now, or tap Skip for a text-only post.',
@@ -258,11 +273,11 @@ async function handleScheduleStart(chatId: number, adminId: number) {
   );
 }
 
-async function handleScheduledList(chatId: number) {
-  const posts = await listPending(10);
+async function handleScheduledList(chatId: number, destination: 'group' | 'channel') {
+  const posts = await listPending(destination, 10);
   if (posts.length === 0) {
     await sendMessage(chatId, 'No scheduled posts.', [
-      [{ text: '⬅️ Admin Panel', callback_data: 'admin_menu' }],
+      [{ text: '⬅️ Back', callback_data: destination === 'channel' ? 'a_channel_menu' : 'admin_menu' }],
     ]);
     return;
   }
@@ -276,8 +291,29 @@ async function handleScheduledList(chatId: number) {
     ]);
   }
   await sendMessage(chatId, 'That is all scheduled posts.', [
-    [{ text: '⬅️ Admin Panel', callback_data: 'admin_menu' }],
+    [{ text: '⬅️ Back', callback_data: destination === 'channel' ? 'a_channel_menu' : 'admin_menu' }],
   ]);
+}
+
+async function handleAdEdit(chatId: number, adminId: number) {
+  await startDraft(adminId, 'channel');
+  const supabase = createAdminClient();
+  await supabase
+    .from('post_drafts')
+    .update({ step: 'awaiting_photo' })
+    .eq('admin_telegram_id', adminId);
+  // Reuse the draft flow, but a special flag isn't needed: we detect
+  // "this is the ad" by step sequence ending differently — simpler to
+  // mark via a dedicated column. Using send_at = null + a marker caption
+  // prefix would be fragile, so we branch in handleAdminMessage instead
+  // using a separate in-memory-free check: draft.destination === 'channel'
+  // AND an explicit ad flag stored on the draft row isn't in schema yet,
+  // so we ask directly here instead of going through the generic flow.
+  await sendMessage(
+    chatId,
+    'Send the image for the daily ad now, or tap Skip for text-only.',
+    [[{ text: 'Skip (text only)', callback_data: 'ad_skip_photo' }]]
+  );
 }
 
 async function handleAdminButton(
@@ -304,13 +340,41 @@ async function handleAdminButton(
     await sendForceReply(chatId, PROMPTS.revoke);
   } else if (data === 'a_price') {
     await sendForceReply(chatId, PROMPTS.price);
-  } else if (data === 'a_schedule') {
-    await handleScheduleStart(chatId, adminId);
-  } else if (data === 'a_scheduled') {
-    await handleScheduledList(chatId);
+  } else if (data === 'a_schedule_group') {
+    await handleScheduleStart(chatId, adminId, 'group');
+  } else if (data === 'a_scheduled_group') {
+    await handleScheduledList(chatId, 'group');
+  } else if (data === 'a_channel_menu') {
+    await clearDraft(adminId);
+    await showChannelMenu(chatId);
+  } else if (data === 'a_schedule_channel') {
+    await handleScheduleStart(chatId, adminId, 'channel');
+  } else if (data === 'a_scheduled_channel') {
+    await handleScheduledList(chatId, 'channel');
+  } else if (data === 'a_ad_edit') {
+    await handleAdEdit(chatId, adminId);
+  } else if (data === 'a_ad_toggle') {
+    const cfg = await getChannelConfig();
+    const next = !(cfg?.ad_enabled ?? false);
+    if (next && (!cfg?.ad_caption && !cfg?.ad_image_file_id)) {
+      await sendMessage(chatId, 'Set the ad content first with "Set / Edit Daily Ad".');
+      await showChannelMenu(chatId);
+      return;
+    }
+    if (next && !cfg?.channel_id) {
+      await sendMessage(chatId, 'The channel is not connected yet. Forward a channel post to me first.');
+      await showChannelMenu(chatId);
+      return;
+    }
+    await setAdEnabled(next);
+    await sendMessage(chatId, next ? 'Daily ad enabled.' : 'Daily ad disabled.');
+    await showChannelMenu(chatId);
   } else if (data === 'sched_skip_photo') {
     await setPhoto(adminId, null, 'awaiting_caption');
     await sendMessage(chatId, 'Send the text for the post.');
+  } else if (data === 'ad_skip_photo') {
+    await setPhoto(adminId, null, 'awaiting_caption');
+    await sendMessage(chatId, 'Send the ad text.');
   } else if (data.startsWith('sched_cancel_')) {
     const id = data.slice('sched_cancel_'.length);
     const ok = await cancelPost(id);
@@ -327,6 +391,7 @@ async function handleAdminButton(
       caption: draft.caption,
       imageFileId: draft.image_file_id,
       sendAt: new Date(draft.send_at),
+      destination: draft.destination,
     });
     await clearDraft(adminId);
     await sendMessage(
@@ -335,8 +400,23 @@ async function handleAdminButton(
         ? 'Scheduled for ' + fmtLagos(new Date(draft.send_at)) + '.'
         : 'Could not save the post. Try again.'
     );
-    await showAdminMenu(chatId);
-  } else if (data === 'sched_cancel_draft') {
+    if (draft.destination === 'channel') await showChannelMenu(chatId);
+    else await showAdminMenu(chatId);
+  } else if (data === 'ad_confirm') {
+    const draft = await getDraft(adminId);
+    if (!draft) {
+      await sendMessage(chatId, 'Nothing to confirm. Start again.');
+      await showChannelMenu(chatId);
+      return;
+    }
+    const ok = await setAd({
+      caption: draft.caption,
+      imageFileId: draft.image_file_id,
+    });
+    await clearDraft(adminId);
+    await sendMessage(chatId, ok ? 'Ad saved.' : 'Could not save the ad. Try again.');
+    await showChannelMenu(chatId);
+  } else if (data === 'sched_cancel_draft' || data === 'ad_cancel_draft') {
     await clearDraft(adminId);
     await sendMessage(chatId, 'Cancelled.');
     await showAdminMenu(chatId);
@@ -354,11 +434,20 @@ async function handleAdminMessage(
   const draft = await getDraft(adminId);
   if (!draft) return false;
 
+  const isAd = draft.destination === 'channel' && draft.send_at === null;
+  // NOTE: an ad-in-progress and a channel-scheduled-post-in-progress both
+  // start with destination='channel' and send_at=null at the photo/caption
+  // steps, so they are indistinguishable here. To keep this reliable we
+  // route ad editing through its own confirm button (ad_confirm) rather
+  // than relying on this flag for the final save — see handleAdminButton.
+  // This flag is only used below to choose which "no time needed" path
+  // to take for the ad, since ads skip the awaiting_time step entirely.
+
   if (draft.step === 'awaiting_photo') {
     if (message.photo && message.photo.length > 0) {
       const fileId = message.photo[message.photo.length - 1].file_id;
       await setPhoto(adminId, fileId, 'awaiting_caption');
-      await sendMessage(chatId, 'Got the photo. Now send the caption text.');
+      await sendMessage(chatId, 'Got the photo. Now send the text.');
       return true;
     }
     await sendMessage(chatId, 'Send a photo, or tap Skip above for text only.');
@@ -368,9 +457,23 @@ async function handleAdminMessage(
   if (draft.step === 'awaiting_caption') {
     const text = (message.text ?? '').trim();
     if (!text) {
-      await sendMessage(chatId, 'Please send some text for the caption.');
+      await sendMessage(chatId, 'Please send some text.');
       return true;
     }
+
+    if (isAd) {
+      await setCaption(adminId, text, 'awaiting_confirm');
+      const preview =
+        text + (draft.image_file_id ? '\n[has image]' : '');
+      await sendMessage(chatId, 'Ad preview:\n\n' + preview, [
+        [
+          { text: '✅ Save Ad', callback_data: 'ad_confirm' },
+          { text: '❌ Cancel', callback_data: 'ad_cancel_draft' },
+        ],
+      ]);
+      return true;
+    }
+
     await setCaption(adminId, text, 'awaiting_time');
     await sendMessage(
       chatId,
@@ -396,7 +499,9 @@ async function handleAdminMessage(
     const preview =
       (draft.caption ?? '(no caption)') +
       (draft.image_file_id ? '\n[has image]' : '') +
-      '\n\nSend at: ' +
+      '\n\nDestination: ' +
+      draft.destination +
+      '\nSend at: ' +
       fmtLagos(parsed);
     await sendMessage(chatId, 'Preview:\n\n' + preview, [
       [
@@ -408,6 +513,27 @@ async function handleAdminMessage(
   }
 
   return false;
+}
+
+async function handleForwardedChannelPost(
+  chatId: number,
+  message: { forward_origin?: { type: string; chat?: { id: number; type: string } }; forward_from_chat?: { id: number; type: string } }
+) {
+  const originChat =
+    message.forward_origin?.chat ?? message.forward_from_chat;
+
+  if (!originChat || originChat.type !== 'channel') {
+    return false;
+  }
+
+  const ok = await setChannelId(originChat.id);
+  await sendMessage(
+    chatId,
+    ok
+      ? 'Channel connected. ID saved: ' + originChat.id
+      : 'Could not save the channel ID. Try again.'
+  );
+  return true;
 }
 
 export async function POST(req: Request) {
@@ -448,7 +574,8 @@ export async function POST(req: Request) {
         } else if (
           data === 'admin_menu' ||
           data.startsWith('a_') ||
-          data.startsWith('sched_')
+          data.startsWith('sched_') ||
+          data.startsWith('ad_')
         ) {
           if (admin) {
             await handleAdminButton(data, chatId, cb.from.id);
@@ -469,7 +596,18 @@ export async function POST(req: Request) {
       const command = parts[0]?.split('@')[0].toLowerCase() ?? '';
       const args = parts.slice(1);
 
-      // Admin composing a scheduled post (photo or text, no leading slash)
+      // Admin forwarding a channel post to capture its ID
+      if (
+        chatType === 'private' &&
+        from &&
+        isAdmin(from.id) &&
+        (message.forward_origin || message.forward_from_chat)
+      ) {
+        const handled = await handleForwardedChannelPost(chatId, message);
+        if (handled) return NextResponse.json({ ok: true });
+      }
+
+      // Admin composing a scheduled post or ad (photo or text, no leading slash)
       if (
         chatType === 'private' &&
         from &&

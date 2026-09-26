@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { dispatchDuePosts } from '@/lib/scheduledPosts';
+import { dispatchDuePosts, dispatchDailyAd } from '@/lib/scheduledPosts';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 30;
@@ -12,6 +12,8 @@ export async function GET(req: Request) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
   
-  const result = await dispatchDuePosts();
-  return NextResponse.json(result);
+  const posts = await dispatchDuePosts();
+  const ad = await dispatchDailyAd();
+  
+  return NextResponse.json({ posts, ad });
 }

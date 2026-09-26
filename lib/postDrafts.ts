@@ -6,6 +6,8 @@ export type DraftStep =
   | 'awaiting_time'
   | 'awaiting_confirm';
 
+export type Destination = 'group' | 'channel';
+
 export type Draft = {
   id: string;
   admin_telegram_id: number;
@@ -13,19 +15,20 @@ export type Draft = {
   image_file_id: string | null;
   caption: string | null;
   send_at: string | null;
+  destination: Destination;
 };
 
 export async function getDraft(adminId: number): Promise<Draft | null> {
   const supabase = createAdminClient();
   const { data } = await supabase
     .from('post_drafts')
-    .select('id, admin_telegram_id, step, image_file_id, caption, send_at')
+    .select('id, admin_telegram_id, step, image_file_id, caption, send_at, destination')
     .eq('admin_telegram_id', adminId)
     .maybeSingle();
   return data as Draft | null;
 }
 
-export async function startDraft(adminId: number) {
+export async function startDraft(adminId: number, destination: Destination) {
   const supabase = createAdminClient();
   await supabase.from('post_drafts').upsert(
     {
@@ -34,6 +37,7 @@ export async function startDraft(adminId: number) {
       image_file_id: null,
       caption: null,
       send_at: null,
+      destination,
       updated_at: new Date().toISOString(),
     },
     { onConflict: 'admin_telegram_id' }

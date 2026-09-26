@@ -8,7 +8,7 @@ export const PROMPTS = {
   price: 'Send the new monthly price in naira.\nExample: 2000',
 };
 
-export const PROMPT_COMMANDS: Record < string, string > = {
+export const PROMPT_COMMANDS: Record<string, string> = {
   [PROMPTS.member]: '/member',
   [PROMPTS.extend]: '/extend',
   [PROMPTS.grant]: '/grant',
@@ -49,11 +49,35 @@ export function adminMenu(): InlineKeyboard {
       { text: '💰 Set Price', callback_data: 'a_price' },
     ],
     [
-      { text: '📝 Schedule Post', callback_data: 'a_schedule' },
-      { text: '📋 Scheduled Posts', callback_data: 'a_scheduled' },
+      { text: '📝 Schedule Post (Group)', callback_data: 'a_schedule_group' },
+      { text: '📋 Group Scheduled', callback_data: 'a_scheduled_group' },
     ],
+    [{ text: '📢 Channel', callback_data: 'a_channel_menu' }],
     [{ text: '⚙️ Run Daily Job', callback_data: 'a_runcron' }],
     [{ text: '⬅️ Back to Menu', callback_data: 'menu' }],
+  ];
+}
+
+export function channelMenu(adEnabled: boolean, channelSet: boolean): InlineKeyboard {
+  return [
+    [
+      {
+        text: channelSet ? '✅ Channel Connected' : '⚠️ Channel Not Set',
+        callback_data: 'a_channel_menu',
+      },
+    ],
+    [{ text: '✏️ Set / Edit Daily Ad', callback_data: 'a_ad_edit' }],
+    [
+      {
+        text: adEnabled ? '🔴 Disable Daily Ad' : '🟢 Enable Daily Ad',
+        callback_data: 'a_ad_toggle',
+      },
+    ],
+    [
+      { text: '📝 Schedule Post (Channel)', callback_data: 'a_schedule_channel' },
+      { text: '📋 Channel Scheduled', callback_data: 'a_scheduled_channel' },
+    ],
+    [{ text: '⬅️ Admin Panel', callback_data: 'admin_menu' }],
   ];
 }
 
