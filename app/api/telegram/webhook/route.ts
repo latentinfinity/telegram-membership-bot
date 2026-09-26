@@ -265,7 +265,7 @@ async function handleScheduleStart(
   adminId: number,
   destination: 'group' | 'channel'
 ) {
-  await startDraft(adminId, destination);
+  await startDraft(adminId, destination, false);
   await sendMessage(
     chatId,
     'Send the photo for this post now, or tap Skip for a text-only post.',
@@ -296,19 +296,7 @@ async function handleScheduledList(chatId: number, destination: 'group' | 'chann
 }
 
 async function handleAdEdit(chatId: number, adminId: number) {
-  await startDraft(adminId, 'channel');
-  const supabase = createAdminClient();
-  await supabase
-    .from('post_drafts')
-    .update({ step: 'awaiting_photo' })
-    .eq('admin_telegram_id', adminId);
-  // Reuse the draft flow, but a special flag isn't needed: we detect
-  // "this is the ad" by step sequence ending differently — simpler to
-  // mark via a dedicated column. Using send_at = null + a marker caption
-  // prefix would be fragile, so we branch in handleAdminMessage instead
-  // using a separate in-memory-free check: draft.destination === 'channel'
-  // AND an explicit ad flag stored on the draft row isn't in schema yet,
-  // so we ask directly here instead of going through the generic flow.
+  await startDraft(adminId, 'channel', true);
   await sendMessage(
     chatId,
     'Send the image for the daily ad now, or tap Skip for text-only.',
@@ -434,14 +422,7 @@ async function handleAdminMessage(
   const draft = await getDraft(adminId);
   if (!draft) return false;
 
-  const isAd = draft.destination === 'channel' && draft.send_at === null;
-  // NOTE: an ad-in-progress and a channel-scheduled-post-in-progress both
-  // start with destination='channel' and send_at=null at the photo/caption
-  // steps, so they are indistinguishable here. To keep this reliable we
-  // route ad editing through its own confirm button (ad_confirm) rather
-  // than relying on this flag for the final save — see handleAdminButton.
-  // This flag is only used below to choose which "no time needed" path
-  // to take for the ad, since ads skip the awaiting_time step entirely.
+  const isAd = draft.is_ad;
 
   if (draft.step === 'awaiting_photo') {
     if (message.photo && message.photo.length > 0) {

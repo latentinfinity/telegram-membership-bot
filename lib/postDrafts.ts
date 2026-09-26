@@ -16,19 +16,24 @@ export type Draft = {
   caption: string | null;
   send_at: string | null;
   destination: Destination;
+  is_ad: boolean;
 };
 
 export async function getDraft(adminId: number): Promise<Draft | null> {
   const supabase = createAdminClient();
   const { data } = await supabase
     .from('post_drafts')
-    .select('id, admin_telegram_id, step, image_file_id, caption, send_at, destination')
+    .select('id, admin_telegram_id, step, image_file_id, caption, send_at, destination, is_ad')
     .eq('admin_telegram_id', adminId)
     .maybeSingle();
   return data as Draft | null;
 }
 
-export async function startDraft(adminId: number, destination: Destination) {
+export async function startDraft(
+  adminId: number,
+  destination: Destination,
+  isAd: boolean
+) {
   const supabase = createAdminClient();
   await supabase.from('post_drafts').upsert(
     {
@@ -38,6 +43,7 @@ export async function startDraft(adminId: number, destination: Destination) {
       caption: null,
       send_at: null,
       destination,
+      is_ad: isAd,
       updated_at: new Date().toISOString(),
     },
     { onConflict: 'admin_telegram_id' }
