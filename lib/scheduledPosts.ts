@@ -12,7 +12,6 @@ export function parseSendAt(input: string): Date | null {
   );
   if (!m) return null;
   const [, y, mo, d, h, mi] = m.map(Number) as unknown as number[];
-  // Input is Africa/Lagos local time (UTC+1, no DST)
   const utcMs = Date.UTC(y, mo - 1, d, h - 1, mi);
   const date = new Date(utcMs);
   if (isNaN(date.getTime())) return null;
@@ -132,11 +131,14 @@ export async function dispatchDuePosts() {
   let sent = 0;
   let failed = 0;
   
-  const { data: channelRow } = await supabase
+  const { data: channelRow, error: channelErr } = await supabase
     .from('channel_config')
     .select('channel_id')
     .limit(1)
     .maybeSingle();
+  if (channelErr) {
+    console.error('channel_config lookup failed in dispatchDuePosts', channelErr);
+  }
   const channelId = channelRow?.channel_id ?? null;
   const groupId = Number(process.env.TELEGRAM_GROUP_ID);
   
@@ -153,6 +155,12 @@ export async function dispatchDuePosts() {
       post.destination === 'channel' ? channelId : groupId;
     
     if (!targetChatId) {
+      console.error(
+        'dispatchDuePosts: no channel configured, channelRow was',
+        JSON.stringify(channelRow),
+        'error was',
+        JSON.stringify(channelErr)
+      );
       await supabase
         .from('scheduled_posts')
         .update({ status: 'failed', error: 'No channel configured' })
