@@ -22,6 +22,21 @@ import {
   showStatus,
   showPaySupport,
 } from '@/lib/userCommands';
+import {
+  getDraft,
+  startDraft,
+  setPhoto,
+  setCaption,
+  setSendAt,
+  clearDraft,
+} from '@/lib/postDrafts';
+import {
+  createScheduledPost,
+  listPending,
+  cancelPost,
+  parseSendAt,
+  fmtLagos,
+} from '@/lib/scheduledPosts';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
@@ -234,12 +249,44 @@ async function showAdminMenu(chatId: number) {
   await sendMessage(chatId, 'Admin Panel', adminMenu());
 }
 
+async function handleScheduleStart(chatId: number, adminId: number) {
+  await startDraft(adminId);
+  await sendMessage(
+    chatId,
+    'Send the photo for this post now, or tap Skip for a text-only post.',
+    [[{ text: 'Skip (text only)', callback_data: 'sched_skip_photo' }]]
+  );
+}
+
+async function handleScheduledList(chatId: number) {
+  const posts = await listPending(10);
+  if (posts.length === 0) {
+    await sendMessage(chatId, 'No scheduled posts.', [
+      [{ text: '⬅️ Admin Panel', callback_data: 'admin_menu' }],
+    ]);
+    return;
+  }
+  for (const p of posts) {
+    const when = fmtLagos(new Date(p.send_at));
+    const preview =
+      (p.caption ? p.caption.slice(0, 80) : '(no caption)') +
+      (p.image_file_id ? '\n[has image]' : '');
+    await sendMessage(chatId, when + '\n' + preview, [
+      [{ text: '❌ Cancel this post', callback_data: 'sched_cancel_' + p.id }],
+    ]);
+  }
+  await sendMessage(chatId, 'That is all scheduled posts.', [
+    [{ text: '⬅️ Admin Panel', callback_data: 'admin_menu' }],
+  ]);
+}
+
 async function handleAdminButton(
   data: string,
   chatId: number,
   adminId: number
 ) {
   if (data === 'admin_menu') {
+    await clearDraft(adminId);
     await showAdminMenu(chatId);
   } else if (data === 'a_stats') {
     await handleAdminCommand(chatId, adminId, '/stats', []);
@@ -257,7 +304,110 @@ async function handleAdminButton(
     await sendForceReply(chatId, PROMPTS.revoke);
   } else if (data === 'a_price') {
     await sendForceReply(chatId, PROMPTS.price);
+  } else if (data === 'a_schedule') {
+    await handleScheduleStart(chatId, adminId);
+  } else if (data === 'a_scheduled') {
+    await handleScheduledList(chatId);
+  } else if (data === 'sched_skip_photo') {
+    await setPhoto(adminId, null, 'awaiting_caption');
+    await sendMessage(chatId, 'Send the text for the post.');
+  } else if (data.startsWith('sched_cancel_')) {
+    const id = data.slice('sched_cancel_'.length);
+    const ok = await cancelPost(id);
+    await sendMessage(chatId, ok ? 'Cancelled.' : 'Could not cancel (already sent?).');
+  } else if (data === 'sched_confirm') {
+    const draft = await getDraft(adminId);
+    if (!draft || draft.step !== 'awaiting_confirm' || !draft.send_at) {
+      await sendMessage(chatId, 'Nothing to confirm. Start again.');
+      await showAdminMenu(chatId);
+      return;
+    }
+    const id = await createScheduledPost({
+      createdBy: adminId,
+      caption: draft.caption,
+      imageFileId: draft.image_file_id,
+      sendAt: new Date(draft.send_at),
+    });
+    await clearDraft(adminId);
+    await sendMessage(
+      chatId,
+      id
+        ? 'Scheduled for ' + fmtLagos(new Date(draft.send_at)) + '.'
+        : 'Could not save the post. Try again.'
+    );
+    await showAdminMenu(chatId);
+  } else if (data === 'sched_cancel_draft') {
+    await clearDraft(adminId);
+    await sendMessage(chatId, 'Cancelled.');
+    await showAdminMenu(chatId);
   }
+}
+
+async function handleAdminMessage(
+  chatId: number,
+  adminId: number,
+  message: {
+    text?: string;
+    photo?: { file_id: string }[];
+  }
+): Promise<boolean> {
+  const draft = await getDraft(adminId);
+  if (!draft) return false;
+
+  if (draft.step === 'awaiting_photo') {
+    if (message.photo && message.photo.length > 0) {
+      const fileId = message.photo[message.photo.length - 1].file_id;
+      await setPhoto(adminId, fileId, 'awaiting_caption');
+      await sendMessage(chatId, 'Got the photo. Now send the caption text.');
+      return true;
+    }
+    await sendMessage(chatId, 'Send a photo, or tap Skip above for text only.');
+    return true;
+  }
+
+  if (draft.step === 'awaiting_caption') {
+    const text = (message.text ?? '').trim();
+    if (!text) {
+      await sendMessage(chatId, 'Please send some text for the caption.');
+      return true;
+    }
+    await setCaption(adminId, text, 'awaiting_time');
+    await sendMessage(
+      chatId,
+      'When should this go out? Send the date and time (Nigeria time) like:\n2026-09-28 18:00'
+    );
+    return true;
+  }
+
+  if (draft.step === 'awaiting_time') {
+    const parsed = parseSendAt(message.text ?? '');
+    if (!parsed) {
+      await sendMessage(
+        chatId,
+        'Could not read that. Use the format: 2026-09-28 18:00'
+      );
+      return true;
+    }
+    if (parsed.getTime() <= Date.now()) {
+      await sendMessage(chatId, 'That time is in the past. Send a future time.');
+      return true;
+    }
+    await setSendAt(adminId, parsed);
+    const preview =
+      (draft.caption ?? '(no caption)') +
+      (draft.image_file_id ? '\n[has image]' : '') +
+      '\n\nSend at: ' +
+      fmtLagos(parsed);
+    await sendMessage(chatId, 'Preview:\n\n' + preview, [
+      [
+        { text: '✅ Confirm', callback_data: 'sched_confirm' },
+        { text: '❌ Cancel', callback_data: 'sched_cancel_draft' },
+      ],
+    ]);
+    return true;
+  }
+
+  return false;
 }
 
 export async function POST(req: Request) {
@@ -295,7 +445,11 @@ export async function POST(req: Request) {
           await showHelp(chatId, admin);
         } else if (data === 'paysupport') {
           await showPaySupport(chatId, cb.from.id);
-        } else if (data === 'admin_menu' || data.startsWith('a_')) {
+        } else if (
+          data === 'admin_menu' ||
+          data.startsWith('a_') ||
+          data.startsWith('sched_')
+        ) {
           if (admin) {
             await handleAdminButton(data, chatId, cb.from.id);
           }
@@ -306,16 +460,30 @@ export async function POST(req: Request) {
 
     const message = update.message;
 
-    if (message && typeof message.text === 'string') {
+    if (message && (typeof message.text === 'string' || message.photo)) {
       const chatId: number = message.chat.id;
       const chatType: string = message.chat.type;
       const from = message.from;
-      const text: string = message.text.trim();
-      const parts: string[] = text.split(/\s+/);
-      const command = parts[0].split('@')[0].toLowerCase();
+      const text: string = (message.text ?? '').trim();
+      const parts: string[] = text ? text.split(/\s+/) : [];
+      const command = parts[0]?.split('@')[0].toLowerCase() ?? '';
       const args = parts.slice(1);
 
-      // Admin answering a button prompt
+      // Admin composing a scheduled post (photo or text, no leading slash)
+      if (
+        chatType === 'private' &&
+        from &&
+        isAdmin(from.id) &&
+        (message.photo || (text && !text.startsWith('/')))
+      ) {
+        const handled = await handleAdminMessage(chatId, from.id, {
+          text: message.text,
+          photo: message.photo,
+        });
+        if (handled) return NextResponse.json({ ok: true });
+      }
+
+      // Admin answering a button prompt (force-reply)
       const replyText: string | undefined = message.reply_to_message?.text;
       if (
         chatType === 'private' &&

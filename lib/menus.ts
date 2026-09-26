@@ -48,6 +48,10 @@ export function adminMenu(): InlineKeyboard {
       { text: '⛔ Revoke', callback_data: 'a_revoke' },
       { text: '💰 Set Price', callback_data: 'a_price' },
     ],
+    [
+      { text: '📝 Schedule Post', callback_data: 'a_schedule' },
+      { text: '📋 Scheduled Posts', callback_data: 'a_scheduled' },
+    ],
     [{ text: '⚙️ Run Daily Job', callback_data: 'a_runcron' }],
     [{ text: '⬅️ Back to Menu', callback_data: 'menu' }],
   ];
