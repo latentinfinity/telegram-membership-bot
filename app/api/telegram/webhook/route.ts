@@ -15,6 +15,7 @@ import {
   PROMPT_COMMANDS,
   adminMenu,
   channelMenu,
+  engagementMenu,
   sendForceReply,
 } from '@/lib/menus';
 import {
@@ -40,6 +41,17 @@ import {
 } from '@/lib/scheduledPosts';
 import { getChannelConfig, setChannelId, setAd, setAdEnabled } from '@/lib/channel';
 import { generateText } from '@/lib/ai';
+import {
+  getChannelProfile,
+  setNiche,
+  setTone,
+  setTopicsToAvoid,
+  setPostingWindow,
+  setDailyCaps,
+  setReplyLimits,
+  toggleAiReplies,
+  formatProfile,
+} from '@/lib/channelProfile';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
@@ -261,6 +273,15 @@ async function showChannelMenu(chatId: number) {
   );
 }
 
+async function showEngagementMenu(chatId: number) {
+  const profile = await getChannelProfile();
+  await sendMessage(
+    chatId,
+    'Engagement settings',
+    engagementMenu(profile?.ai_replies_enabled ?? false)
+  );
+}
+
 async function handleScheduleStart(
   chatId: number,
   adminId: number,
@@ -358,6 +379,37 @@ async function handleAdminButton(
     await setAdEnabled(next);
     await sendMessage(chatId, next ? 'Daily ad enabled.' : 'Daily ad disabled.');
     await showChannelMenu(chatId);
+  } else if (data === 'a_engagement_menu') {
+    await clearDraft(adminId);
+    await showEngagementMenu(chatId);
+  } else if (data === 'a_eng_view') {
+    const profile = await getChannelProfile();
+    if (profile) {
+      await sendMessage(chatId, formatProfile(profile));
+    } else {
+      await sendMessage(chatId, 'No channel profile found.');
+    }
+    await showEngagementMenu(chatId);
+  } else if (data === 'a_eng_niche') {
+    await sendForceReply(chatId, PROMPTS.engNiche);
+  } else if (data === 'a_eng_tone') {
+    await sendForceReply(chatId, PROMPTS.engTone);
+  } else if (data === 'a_eng_avoid') {
+    await sendForceReply(chatId, PROMPTS.engAvoid);
+  } else if (data === 'a_eng_window') {
+    await sendForceReply(chatId, PROMPTS.engWindow);
+  } else if (data === 'a_eng_caps') {
+    await sendForceReply(chatId, PROMPTS.engCaps);
+  } else if (data === 'a_eng_reply_limits') {
+    await sendForceReply(chatId, PROMPTS.engReplyLimits);
+  } else if (data === 'a_eng_toggle') {
+    const next = await toggleAiReplies();
+    if (next === null) {
+      await sendMessage(chatId, 'Could not toggle AI replies.');
+    } else {
+      await sendMessage(chatId, next ? 'AI replies enabled.' : 'AI replies disabled.');
+    }
+    await showEngagementMenu(chatId);
   } else if (data === 'sched_skip_photo') {
     await setPhoto(adminId, null, 'awaiting_caption');
     await sendMessage(chatId, 'Send the text for the post.');
@@ -518,6 +570,46 @@ async function handleForwardedChannelPost(
   return true;
 }
 
+async function handleEngagementReply(
+  chatId: number,
+  engCommand: string,
+  rawText: string
+): Promise<boolean> {
+  let ok = false;
+  let label = '';
+
+  if (engCommand === 'eng_niche') {
+    ok = await setNiche(rawText);
+    label = 'Niche';
+  } else if (engCommand === 'eng_tone') {
+    ok = await setTone(rawText);
+    label = 'Tone';
+  } else if (engCommand === 'eng_avoid') {
+    ok = await setTopicsToAvoid(rawText);
+    label = 'Topics to avoid';
+  } else if (engCommand === 'eng_window') {
+    ok = await setPostingWindow(rawText);
+    label = 'Posting window';
+  } else if (engCommand === 'eng_caps') {
+    ok = await setDailyCaps(rawText);
+    label = 'Daily caps';
+  } else if (engCommand === 'eng_reply_limits') {
+    ok = await setReplyLimits(rawText);
+    label = 'Reply limits';
+  } else {
+    return false;
+  }
+
+  await sendMessage(
+    chatId,
+    ok
+      ? label + ' updated.'
+      : label + ' could not be saved. Check the format and try again.'
+  );
+  await showEngagementMenu(chatId);
+  return true;
+}
+
 export async function POST(req: Request) {
   const secret = req.headers.get('x-telegram-bot-api-secret-token');
   if (secret !== process.env.TELEGRAM_WEBHOOK_SECRET) {
@@ -613,13 +705,13 @@ export async function POST(req: Request) {
         PROMPT_COMMANDS[replyText] &&
         !text.startsWith('/')
       ) {
-        await handleAdminCommand(
-          chatId,
-          from.id,
-          PROMPT_COMMANDS[replyText],
-          parts
-        );
-        await showAdminMenu(chatId);
+        const promptCommand = PROMPT_COMMANDS[replyText];
+        if (promptCommand.startsWith('eng_')) {
+          await handleEngagementReply(chatId, promptCommand, text);
+        } else {
+          await handleAdminCommand(chatId, from.id, promptCommand, parts);
+          await showAdminMenu(chatId);
+        }
         return NextResponse.json({ ok: true });
       }
 
