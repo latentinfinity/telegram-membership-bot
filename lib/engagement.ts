@@ -74,12 +74,27 @@ async function logContent(postType: 'post' | 'poll', content: string) {
   await supabase.from('engagement_posts_log').insert({ post_type: postType, content });
 }
 
+// buildSystemPrompt() — the hard "no fixture knowledge" rule below is
+// intentionally NOT driven by the niche/topics_to_avoid text in the
+// database. It always applies, regardless of what an admin later types
+// into those fields, because this bot has no live sports data source
+// and the AI has no way to know what's actually being played. Without
+// this, a well-meaning niche edit ("weekend match previews") could
+// silently reopen the hallucination problem this guardrail exists to
+// prevent.
 function buildSystemPrompt(profile: ChannelProfile) {
   return (
     'You write content for a Telegram channel.\n' +
     'Niche: ' + (profile.niche || 'general sports') + '\n' +
     'Tone: ' + (profile.tone || 'neutral') + '\n' +
     'Never mention or write about: ' + (profile.topics_to_avoid || 'nothing specific') + '\n' +
+    'HARD RULE, NEVER BREAK THIS: you have no access to real-time sports ' +
+    'data, fixtures, results, or odds. Never invent, name, or imply ' +
+    'knowledge of any specific match, team fixture, scoreline, or date. ' +
+    'Write only generic, evergreen content — hype, opinion questions, ' +
+    'trivia, discussion starters, betting psychology. If a prompt asks ' +
+    'for anything that would require knowing an actual upcoming match, ' +
+    'write about the general topic instead, never a specific game.\n' +
     'Never make guarantees. Keep it concise and native to Telegram.'
   );
 }
@@ -97,6 +112,10 @@ export async function dispatchEngagementContent() {
   
   if (!profile || !channelId) {
     return { attempted: false, reason: 'not configured' };
+  }
+  
+  if (!profile.ai_posts_enabled) {
+    return { attempted: false, reason: 'AI posts disabled' };
   }
   
   const { hour, minute } = nigeriaHourMinute(new Date());

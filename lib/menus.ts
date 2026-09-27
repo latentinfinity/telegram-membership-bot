@@ -99,7 +99,10 @@ export function channelMenu(adEnabled: boolean, channelSet: boolean): InlineKeyb
   ];
 }
 
-export function engagementMenu(aiRepliesEnabled: boolean): InlineKeyboard {
+export function engagementMenu(
+  aiPostsEnabled: boolean,
+  aiRepliesEnabled: boolean
+): InlineKeyboard {
   return [
     [{ text: '📋 View Profile', callback_data: 'a_eng_view' }],
     [
@@ -110,6 +113,12 @@ export function engagementMenu(aiRepliesEnabled: boolean): InlineKeyboard {
     [
       { text: '🕒 Posting Window', callback_data: 'a_eng_window' },
       { text: '📊 Daily Caps', callback_data: 'a_eng_caps' },
+    ],
+    [
+      {
+        text: aiPostsEnabled ? '🔴 Disable AI Posts' : '🟢 Enable AI Posts',
+        callback_data: 'a_eng_posts_toggle',
+      },
     ],
     [{ text: '💬 Reply Limits', callback_data: 'a_eng_reply_limits' }],
     [

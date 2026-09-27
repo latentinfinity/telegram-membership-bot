@@ -49,6 +49,7 @@ import {
   setPostingWindow,
   setDailyCaps,
   setReplyLimits,
+  toggleAiPosts,
   toggleAiReplies,
   formatProfile,
 } from '@/lib/channelProfile';
@@ -278,7 +279,10 @@ async function showEngagementMenu(chatId: number) {
   await sendMessage(
     chatId,
     'Engagement settings',
-    engagementMenu(profile?.ai_replies_enabled ?? false)
+    engagementMenu(
+      profile?.ai_posts_enabled ?? false,
+      profile?.ai_replies_enabled ?? false
+    )
   );
 }
 
@@ -402,6 +406,14 @@ async function handleAdminButton(
     await sendForceReply(chatId, PROMPTS.engCaps);
   } else if (data === 'a_eng_reply_limits') {
     await sendForceReply(chatId, PROMPTS.engReplyLimits);
+  } else if (data === 'a_eng_posts_toggle') {
+    const next = await toggleAiPosts();
+    if (next === null) {
+      await sendMessage(chatId, 'Could not toggle AI posts.');
+    } else {
+      await sendMessage(chatId, next ? 'AI posts enabled.' : 'AI posts disabled.');
+    }
+    await showEngagementMenu(chatId);
   } else if (data === 'a_eng_toggle') {
     const next = await toggleAiReplies();
     if (next === null) {

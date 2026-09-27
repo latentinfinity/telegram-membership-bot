@@ -9,6 +9,7 @@ export type ChannelProfile = {
   posting_window_end_hour: number;
   max_posts_per_day: number;
   max_polls_per_day: number;
+  ai_posts_enabled: boolean;
   ai_replies_enabled: boolean;
   max_replies_per_day: number;
   reply_cooldown_minutes: number;
@@ -93,6 +94,14 @@ export async function setReplyLimits(text: string): Promise < boolean > {
   });
 }
 
+export async function toggleAiPosts(): Promise < boolean | null > {
+  const profile = await getChannelProfile();
+  if (!profile) return null;
+  const next = !profile.ai_posts_enabled;
+  const ok = await updateProfile({ ai_posts_enabled: next });
+  return ok ? next : null;
+}
+
 export async function toggleAiReplies(): Promise < boolean | null > {
   const profile = await getChannelProfile();
   if (!profile) return null;
@@ -107,6 +116,7 @@ export function formatProfile(p: ChannelProfile): string {
     'Niche: ' + (p.niche || '(not set)') + '\n' +
     'Tone: ' + (p.tone || '(not set)') + '\n' +
     'Avoid: ' + (p.topics_to_avoid || '(not set)') + '\n\n' +
+    'AI posts/polls: ' + (p.ai_posts_enabled ? 'ON ✅' : 'OFF ❌') + '\n' +
     'Posting window: ' + p.posting_window_start_hour + ':00–' + p.posting_window_end_hour + ':00 (Nigeria time)\n' +
     'Max posts/day: ' + p.max_posts_per_day + '\n' +
     'Max polls/day: ' + p.max_polls_per_day + '\n\n' +
