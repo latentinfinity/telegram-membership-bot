@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { dispatchDuePosts, dispatchDailyAd } from '@/lib/scheduledPosts';
+import { dispatchEngagementContent } from '@/lib/engagement';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 30;
@@ -14,6 +15,7 @@ export async function GET(req: Request) {
   
   const posts = await dispatchDuePosts();
   const ad = await dispatchDailyAd();
+  const engagement = await dispatchEngagementContent();
   
-  return NextResponse.json({ posts, ad });
+  return NextResponse.json({ posts, ad, engagement });
 }
