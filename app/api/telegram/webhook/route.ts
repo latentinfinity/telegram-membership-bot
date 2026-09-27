@@ -581,31 +581,9 @@ export async function POST(req: Request) {
       const command = parts[0]?.split('@')[0].toLowerCase() ?? '';
       const args = parts.slice(1);
       
-      // ═══════════════════════════════════════════════════════════
-      // TEMPORARY DEBUG — REMOVE AFTER TESTING
-      // Confirms the bot can see plain (non-command) messages in a
-      // group/supergroup now that Privacy Mode is off + bot is admin
-      // there. Only replies to the admin's own messages so it can't
-      // spam paying members in the private group during this test.
-      // Replies right in the chat so this can be verified from
-      // mobile with no dashboard access needed.
-      // ═══════════════════════════════════════════════════════════
-      if (
-        (chatType === 'group' || chatType === 'supergroup') &&
-        from &&
-        isAdmin(from.id) &&
-        text &&
-        !text.startsWith('/')
-      ) {
-        await sendMessage(
-          chatId,
-          '🔧 DEBUG\nchat.id: ' + chatId +
-          '\nchat.type: ' + chatType +
-          '\ntext: ' + text
-        );
-        return NextResponse.json({ ok: true });
-      }
-      // ═══════════════════ END TEMPORARY DEBUG ═══════════════════
+
+      
+      
       
       // Admin forwarding a channel post to capture its ID
       if (
