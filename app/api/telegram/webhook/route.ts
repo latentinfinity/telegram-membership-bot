@@ -43,7 +43,7 @@ import { getChannelConfig, setChannelId, setAd, setAdEnabled } from '@/lib/chann
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
 
-type TgFrom = { id: number; username?: string };
+type TgFrom = { id: number;username ? : string };
 
 function isAdmin(telegramId: number) {
   const ids = (process.env.TELEGRAM_ADMIN_IDS ?? '')
@@ -58,14 +58,12 @@ async function upsertUser(from: TgFrom) {
   const { data, error } = await supabase
     .from('telegram_users')
     .upsert(
-      {
-        telegram_id: from.id,
-        telegram_username: from.username ?? null,
-        has_started_bot: true,
-        is_blocked: false,
-      },
-      { onConflict: 'telegram_id' }
-    )
+    {
+      telegram_id: from.id,
+      telegram_username: from.username ?? null,
+      has_started_bot: true,
+      is_blocked: false,
+    }, { onConflict: 'telegram_id' })
     .select('id')
     .single();
   if (error) console.error('telegram_users upsert failed', error);
@@ -74,14 +72,14 @@ async function upsertUser(from: TgFrom) {
 
 async function findAccess(telegramId: number) {
   const supabase = createAdminClient();
-
+  
   const { data: user } = await supabase
     .from('telegram_users')
     .select('id')
     .eq('telegram_id', telegramId)
     .maybeSingle();
   if (!user) return null;
-
+  
   const { data: sub } = await supabase
     .from('subscriptions')
     .select('id, status, grace_ends_at')
@@ -89,34 +87,34 @@ async function findAccess(telegramId: number) {
     .eq('is_deleted', false)
     .in('status', ['active', 'grace'])
     .maybeSingle();
-
+  
   if (!sub) return null;
   if (new Date(sub.grace_ends_at) <= new Date()) return null;
-
+  
   return { userId: user.id as string, subscriptionId: sub.id as string };
 }
 
 async function handleSubscribe(chatId: number, from: TgFrom) {
   const supabase = createAdminClient();
-
+  
   const user = await upsertUser(from);
   if (!user) {
     await sendMessage(chatId, 'Something went wrong. Please try again.');
     return;
   }
-
+  
   const { data: plan } = await supabase
     .from('membership_plans')
     .select('id, duration_days')
     .eq('name', 'monthly')
     .eq('active', true)
     .single();
-
+  
   if (!plan) {
     await sendMessage(chatId, 'No plan is available right now.');
     return;
   }
-
+  
   const { data: price } = await supabase
     .from('plan_prices')
     .select('amount')
@@ -124,15 +122,15 @@ async function handleSubscribe(chatId: number, from: TgFrom) {
     .eq('currency', 'NGN')
     .eq('active', true)
     .single();
-
+  
   if (!price) {
     await sendMessage(chatId, 'No price is set right now.');
     return;
   }
-
+  
   const amount = Number(price.amount);
   const reference = makeReference(from.id);
-
+  
   const { error: insertError } = await supabase.from('payments').insert({
     telegram_user_id: user.id,
     provider: 'paystack',
@@ -141,19 +139,19 @@ async function handleSubscribe(chatId: number, from: TgFrom) {
     currency: 'NGN',
     status: 'pending',
   });
-
+  
   if (insertError) {
     console.error('payments insert failed', insertError);
     await sendMessage(chatId, 'Something went wrong. Please try again.');
     return;
   }
-
+  
   const result = await initializeTransaction({
     telegramId: from.id,
     amountNaira: amount,
     reference,
   });
-
+  
   if (!result.ok) {
     console.error('paystack initialize failed', result.error);
     await supabase
@@ -163,14 +161,14 @@ async function handleSubscribe(chatId: number, from: TgFrom) {
     await sendMessage(chatId, 'Could not start payment. Please try again.');
     return;
   }
-
+  
   await sendMessage(
     chatId,
     'Monthly membership: ₦' +
-      amount.toLocaleString('en-NG') +
-      ' for ' +
-      plan.duration_days +
-      ' days.\n\nTap the button to pay securely. Access is sent here after payment.',
+    amount.toLocaleString('en-NG') +
+    ' for ' +
+    plan.duration_days +
+    ' days.\n\nTap the button to pay securely. Access is sent here after payment.',
     [
       [{ text: 'Pay ₦' + amount.toLocaleString('en-NG'), url: result.authorizationUrl }],
       [{ text: '⬅️ Menu', callback_data: 'menu' }],
@@ -184,7 +182,9 @@ async function handleGetLink(chatId: number, from: TgFrom) {
     await sendMessage(
       chatId,
       'You do not have an active membership. Tap below to subscribe.',
-      [[{ text: '💳 Subscribe', callback_data: 'subscribe' }]]
+      [
+        [{ text: '💳 Subscribe', callback_data: 'subscribe' }]
+      ]
     );
     return;
   }
@@ -196,26 +196,26 @@ async function handleGetLink(chatId: number, from: TgFrom) {
   });
 }
 
-async function handleJoinRequest(req: { chat: { id: number }; from: TgFrom }) {
+async function handleJoinRequest(req: { chat: { id: number };from: TgFrom }) {
   if (String(req.chat.id) !== process.env.TELEGRAM_GROUP_ID) return;
-
+  
   const telegramId = req.from.id;
-
+  
   if (isAdmin(telegramId)) {
     await approveJoinRequest(telegramId);
     return;
   }
-
+  
   const access = await findAccess(telegramId);
-
+  
   if (!access) {
     await declineJoinRequest(telegramId);
     console.log('join request declined for', telegramId);
     return;
   }
-
+  
   const approved = await approveJoinRequest(telegramId);
-
+  
   const supabase = createAdminClient();
   await supabase.from('access_events').insert({
     telegram_user_id: access.userId,
@@ -223,7 +223,7 @@ async function handleJoinRequest(req: { chat: { id: number }; from: TgFrom }) {
     event_type: 'join_approved',
     result: approved ? 'success' : 'failed',
   });
-
+  
   if (approved) {
     await sendMessage(telegramId, 'Approved. Welcome to the group!');
   }
@@ -235,15 +235,15 @@ async function handleRunCron(chatId: number) {
   await sendMessage(
     chatId,
     'Done.' +
-      '\nPayments recovered: ' + s.paymentsRecovered +
-      '\nPending payments closed: ' + s.paymentsClosed +
-      '\nMoved to grace: ' + s.movedToGrace +
-      '\nExpired: ' + s.expired +
-      '\nRemoved from group: ' + s.removed +
-      '\nRemoval failed: ' + s.removalFailed +
-      '\nReminders sent: ' + s.reminders +
-      '\nRetries ok/failed: ' + s.retriesOk + '/' + s.retriesFailed +
-      (s.truncated ? '\nStopped early (time). Run again.' : '')
+    '\nPayments recovered: ' + s.paymentsRecovered +
+    '\nPending payments closed: ' + s.paymentsClosed +
+    '\nMoved to grace: ' + s.movedToGrace +
+    '\nExpired: ' + s.expired +
+    '\nRemoved from group: ' + s.removed +
+    '\nRemoval failed: ' + s.removalFailed +
+    '\nReminders sent: ' + s.reminders +
+    '\nRetries ok/failed: ' + s.retriesOk + '/' + s.retriesFailed +
+    (s.truncated ? '\nStopped early (time). Run again.' : '')
   );
 }
 
@@ -269,7 +269,9 @@ async function handleScheduleStart(
   await sendMessage(
     chatId,
     'Send the photo for this post now, or tap Skip for a text-only post.',
-    [[{ text: 'Skip (text only)', callback_data: 'sched_skip_photo' }]]
+    [
+      [{ text: 'Skip (text only)', callback_data: 'sched_skip_photo' }]
+    ]
   );
 }
 
@@ -300,7 +302,9 @@ async function handleAdEdit(chatId: number, adminId: number) {
   await sendMessage(
     chatId,
     'Send the image for the daily ad now, or tap Skip for text-only.',
-    [[{ text: 'Skip (text only)', callback_data: 'ad_skip_photo' }]]
+    [
+      [{ text: 'Skip (text only)', callback_data: 'ad_skip_photo' }]
+    ]
   );
 }
 
@@ -384,9 +388,9 @@ async function handleAdminButton(
     await clearDraft(adminId);
     await sendMessage(
       chatId,
-      id
-        ? 'Scheduled for ' + fmtLagos(new Date(draft.send_at)) + '.'
-        : 'Could not save the post. Try again.'
+      id ?
+      'Scheduled for ' + fmtLagos(new Date(draft.send_at)) + '.' :
+      'Could not save the post. Try again.'
     );
     if (draft.destination === 'channel') await showChannelMenu(chatId);
     else await showAdminMenu(chatId);
@@ -415,15 +419,15 @@ async function handleAdminMessage(
   chatId: number,
   adminId: number,
   message: {
-    text?: string;
-    photo?: { file_id: string }[];
+    text ? : string;
+    photo ? : { file_id: string } [];
   }
-): Promise<boolean> {
+): Promise < boolean > {
   const draft = await getDraft(adminId);
   if (!draft) return false;
-
+  
   const isAd = draft.is_ad;
-
+  
   if (draft.step === 'awaiting_photo') {
     if (message.photo && message.photo.length > 0) {
       const fileId = message.photo[message.photo.length - 1].file_id;
@@ -434,14 +438,14 @@ async function handleAdminMessage(
     await sendMessage(chatId, 'Send a photo, or tap Skip above for text only.');
     return true;
   }
-
+  
   if (draft.step === 'awaiting_caption') {
     const text = (message.text ?? '').trim();
     if (!text) {
       await sendMessage(chatId, 'Please send some text.');
       return true;
     }
-
+    
     if (isAd) {
       await setCaption(adminId, text, 'awaiting_confirm');
       const preview =
@@ -454,7 +458,7 @@ async function handleAdminMessage(
       ]);
       return true;
     }
-
+    
     await setCaption(adminId, text, 'awaiting_time');
     await sendMessage(
       chatId,
@@ -462,7 +466,7 @@ async function handleAdminMessage(
     );
     return true;
   }
-
+  
   if (draft.step === 'awaiting_time') {
     const parsed = parseSendAt(message.text ?? '');
     if (!parsed) {
@@ -492,27 +496,27 @@ async function handleAdminMessage(
     ]);
     return true;
   }
-
+  
   return false;
 }
 
 async function handleForwardedChannelPost(
   chatId: number,
-  message: { forward_origin?: { type: string; chat?: { id: number; type: string } }; forward_from_chat?: { id: number; type: string } }
+  message: { forward_origin ? : { type: string;chat ? : { id: number;type: string } };forward_from_chat ? : { id: number;type: string } }
 ) {
   const originChat =
     message.forward_origin?.chat ?? message.forward_from_chat;
-
+  
   if (!originChat || originChat.type !== 'channel') {
     return false;
   }
-
+  
   const ok = await setChannelId(originChat.id);
   await sendMessage(
     chatId,
-    ok
-      ? 'Channel connected. ID saved: ' + originChat.id
-      : 'Could not save the channel ID. Try again.'
+    ok ?
+    'Channel connected. ID saved: ' + originChat.id :
+    'Could not save the channel ID. Try again.'
   );
   return true;
 }
@@ -522,24 +526,24 @@ export async function POST(req: Request) {
   if (secret !== process.env.TELEGRAM_WEBHOOK_SECRET) {
     return NextResponse.json({ ok: false }, { status: 401 });
   }
-
+  
   try {
     const update = await req.json();
-
+    
     if (update.chat_join_request) {
       await handleJoinRequest(update.chat_join_request);
       return NextResponse.json({ ok: true });
     }
-
+    
     if (update.callback_query) {
       const cb = update.callback_query;
       await answerCallbackQuery(cb.id);
-
+      
       if (cb.message && cb.from && cb.message.chat.type === 'private') {
         const chatId: number = cb.message.chat.id;
         const data: string = cb.data ?? '';
         const admin = isAdmin(cb.from.id);
-
+        
         if (data === 'subscribe') {
           await handleSubscribe(chatId, cb.from);
         } else if (data === 'get_link') {
@@ -565,9 +569,9 @@ export async function POST(req: Request) {
       }
       return NextResponse.json({ ok: true });
     }
-
+    
     const message = update.message;
-
+    
     if (message && (typeof message.text === 'string' || message.photo)) {
       const chatId: number = message.chat.id;
       const chatType: string = message.chat.type;
@@ -576,7 +580,33 @@ export async function POST(req: Request) {
       const parts: string[] = text ? text.split(/\s+/) : [];
       const command = parts[0]?.split('@')[0].toLowerCase() ?? '';
       const args = parts.slice(1);
-
+      
+      // ═══════════════════════════════════════════════════════════
+      // TEMPORARY DEBUG — REMOVE AFTER TESTING
+      // Confirms the bot can see plain (non-command) messages in a
+      // group/supergroup now that Privacy Mode is off + bot is admin
+      // there. Only replies to the admin's own messages so it can't
+      // spam paying members in the private group during this test.
+      // Replies right in the chat so this can be verified from
+      // mobile with no dashboard access needed.
+      // ═══════════════════════════════════════════════════════════
+      if (
+        (chatType === 'group' || chatType === 'supergroup') &&
+        from &&
+        isAdmin(from.id) &&
+        text &&
+        !text.startsWith('/')
+      ) {
+        await sendMessage(
+          chatId,
+          '🔧 DEBUG\nchat.id: ' + chatId +
+          '\nchat.type: ' + chatType +
+          '\ntext: ' + text
+        );
+        return NextResponse.json({ ok: true });
+      }
+      // ═══════════════════ END TEMPORARY DEBUG ═══════════════════
+      
       // Admin forwarding a channel post to capture its ID
       if (
         chatType === 'private' &&
@@ -587,7 +617,7 @@ export async function POST(req: Request) {
         const handled = await handleForwardedChannelPost(chatId, message);
         if (handled) return NextResponse.json({ ok: true });
       }
-
+      
       // Admin composing a scheduled post or ad (photo or text, no leading slash)
       if (
         chatType === 'private' &&
@@ -601,7 +631,7 @@ export async function POST(req: Request) {
         });
         if (handled) return NextResponse.json({ ok: true });
       }
-
+      
       // Admin answering a button prompt (force-reply)
       const replyText: string | undefined = message.reply_to_message?.text;
       if (
@@ -621,7 +651,7 @@ export async function POST(req: Request) {
         await showAdminMenu(chatId);
         return NextResponse.json({ ok: true });
       }
-
+      
       if (command === '/runcron') {
         if (chatType === 'private' && from && isAdmin(from.id)) {
           await handleRunCron(chatId);
@@ -639,7 +669,9 @@ export async function POST(req: Request) {
           await sendMessage(
             chatId,
             'Welcome! Tap a button below to get started.',
-            [[{ text: '📋 Open Menu', callback_data: 'menu' }]]
+            [
+              [{ text: '📋 Open Menu', callback_data: 'menu' }]
+            ]
           );
           await showMenu(chatId, admin);
         } else if (command === '/subscribe') {
@@ -658,6 +690,6 @@ export async function POST(req: Request) {
   } catch (e) {
     console.error('webhook error', e);
   }
-
+  
   return NextResponse.json({ ok: true });
 }
