@@ -1,6 +1,6 @@
 // lib/ai.ts
 // Stage 1: AI provider wrappers — pure functions, no DB access.
-// Primary: Gemini 2.5 Flash. Fallback: Groq (Llama 3.3 70B).
+// Primary: Gemini 3.8 Flash. Fallback: Groq (GPT-OSS 120B).
 // generateText() never throws — it always returns a result object so
 // callers (cron dispatch, webhook replies) can decide what "no content"
 // means in their own context instead of crashing.
@@ -9,13 +9,13 @@ type AiResult =
   | { ok: true; text: string; provider: 'gemini' | 'groq' }
   | { ok: false; error: string };
 
-const GEMINI_MODEL = 'gemini-2.5-flash';
+const GEMINI_MODEL = 'gemini-3.8-flash';
 const GEMINI_URL =
   'https://generativelanguage.googleapis.com/v1beta/models/' +
   GEMINI_MODEL +
   ':generateContent';
 
-const GROQ_MODEL = 'llama-3.3-70b-versatile';
+const GROQ_MODEL = 'openai/gpt-oss-120b';
 const GROQ_URL = 'https://api.groq.com/openai/v1/chat/completions';
 
 async function callGemini(
