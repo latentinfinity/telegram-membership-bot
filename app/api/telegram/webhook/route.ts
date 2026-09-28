@@ -53,6 +53,8 @@ import {
   toggleAiReplies,
   formatProfile,
 } from '@/lib/channelProfile';
+import { handleDiscussionMessage, generateReply } from '@/lib/replies';
+import { getEngagementSummary } from '@/lib/engagementStats';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
@@ -394,6 +396,9 @@ async function handleAdminButton(
       await sendMessage(chatId, 'No channel profile found.');
     }
     await showEngagementMenu(chatId);
+  } else if (data === 'a_eng_stats') {
+    await sendMessage(chatId, await getEngagementSummary());
+    await showEngagementMenu(chatId);
   } else if (data === 'a_eng_niche') {
     await sendForceReply(chatId, PROMPTS.engNiche);
   } else if (data === 'a_eng_tone') {
@@ -682,6 +687,21 @@ export async function POST(req: Request) {
       const command = parts[0]?.split('@')[0].toLowerCase() ?? '';
       const args = parts.slice(1);
 
+      // AI replies in the channel's linked discussion group.
+      // The paid membership group is skipped up front.
+      if (
+        (chatType === 'group' || chatType === 'supergroup') &&
+        typeof message.text === 'string' &&
+        !text.startsWith('/') &&
+        String(chatId) !== process.env.TELEGRAM_GROUP_ID
+      ) {
+        const consumed = await handleDiscussionMessage(
+          message,
+          !!from && isAdmin(from.id)
+        );
+        if (consumed) return NextResponse.json({ ok: true });
+      }
+
       // Admin forwarding a channel post to capture its ID
       if (
         chatType === 'private' &&
@@ -745,6 +765,36 @@ export async function POST(req: Request) {
             );
           } else {
             await sendMessage(chatId, '❌ Failed:\n' + result.error);
+          }
+        }
+      } else if (command === '/testreply') {
+        if (chatType === 'private' && from && isAdmin(from.id)) {
+          const sample = args.join(' ').trim();
+          if (!sample) {
+            await sendMessage(
+              chatId,
+              'Usage: /testreply <a sample member comment>\nExample: /testreply Happy Sunday sir'
+            );
+          } else {
+            const profile = await getChannelProfile();
+            if (!profile) {
+              await sendMessage(chatId, 'No channel profile found.');
+            } else {
+              const r = await generateReply(profile, sample);
+              if (!r.ok) {
+                await sendMessage(chatId, '❌ Failed:\n' + r.error);
+              } else if (r.skip) {
+                await sendMessage(
+                  chatId,
+                  '⏭ The AI chose to skip this message (no reply would be sent).'
+                );
+              } else {
+                await sendMessage(
+                  chatId,
+                  '✅ (' + r.provider + ') Would reply:\n\n' + r.text
+                );
+              }
+            }
           }
         }
       } else if (ADMIN_COMMANDS.includes(command)) {

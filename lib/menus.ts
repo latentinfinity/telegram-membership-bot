@@ -104,7 +104,10 @@ export function engagementMenu(
   aiRepliesEnabled: boolean
 ): InlineKeyboard {
   return [
-    [{ text: '📋 View Profile', callback_data: 'a_eng_view' }],
+    [
+      { text: '📋 View Profile', callback_data: 'a_eng_view' },
+      { text: "📊 Today's Activity", callback_data: 'a_eng_stats' },
+    ],
     [
       { text: '🎯 Set Niche', callback_data: 'a_eng_niche' },
       { text: '🎭 Set Tone', callback_data: 'a_eng_tone' },
