@@ -18,6 +18,7 @@ import {
   engagementMenu,
   masanielloMenu,
   masanielloCancelConfirm,
+  masanielloTicketKeyboard,
   sendForceReply,
 } from '@/lib/menus';
 import {
@@ -63,7 +64,12 @@ import {
   createCycle,
   cancelActiveCycle,
   cycleDashboard,
+  getOpenTicket,
+  createTicket,
+  discardOpenTicket,
+  ticketCard,
 } from '@/lib/masanielloStore';
+import type { MasCycle } from '@/lib/masanielloStore';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
@@ -299,11 +305,29 @@ async function showEngagementMenu(chatId: number) {
 
 async function showMasanielloMenu(chatId: number) {
   const active = await getActiveCycle();
+  let hasOpen = false;
+  if (active) {
+    hasOpen = !!(await getOpenTicket(active.id));
+  }
   await sendMessage(
     chatId,
-    active ? 'Masaniello: a cycle is active.' : 'Masaniello: no active cycle.',
-    masanielloMenu(!!active)
+    active
+      ? hasOpen
+        ? 'Masaniello: a cycle is active and a ticket is open.'
+        : 'Masaniello: a cycle is active.'
+      : 'Masaniello: no active cycle.',
+    masanielloMenu(!!active, hasOpen)
   );
+}
+
+async function showOpenTicket(chatId: number, cycle: MasCycle) {
+  const ticket = await getOpenTicket(cycle.id);
+  if (!ticket) {
+    await sendMessage(chatId, 'There is no open ticket.');
+    await showMasanielloMenu(chatId);
+    return;
+  }
+  await sendMessage(chatId, ticketCard(cycle, ticket), masanielloTicketKeyboard());
 }
 
 async function handleMasanielloNew(
@@ -349,6 +373,42 @@ async function handleMasanielloNew(
 
   await sendMessage(chatId, 'Cycle created.\n\n' + cycleDashboard(result.cycle));
   await showMasanielloMenu(chatId);
+}
+
+async function handleMasanielloTicket(chatId: number, rawText: string) {
+  const active = await getActiveCycle();
+  if (!active) {
+    await sendMessage(chatId, 'There is no active cycle.');
+    await showMasanielloMenu(chatId);
+    return;
+  }
+
+  const bar = rawText.indexOf('|');
+  const oddsText = bar === -1 ? rawText : rawText.slice(0, bar);
+  const predText = bar === -1 ? '' : rawText.slice(bar + 1).trim();
+  const oddsH = parseOdds(oddsText);
+  if (oddsH === null) {
+    await sendMessage(
+      chatId,
+      'Could not read the odds. Send: odds | prediction\nExample: 1.85 | Arsenal & Chelsea over 1.5\nOdds must be greater than 1.00 with at most 2 decimals.'
+    );
+    await showMasanielloMenu(chatId);
+    return;
+  }
+
+  const prediction = predText ? predText.slice(0, 300) : null;
+  const result = await createTicket(active, oddsH, prediction);
+  if (!result.ok) {
+    await sendMessage(chatId, '❌ ' + result.error);
+    await showMasanielloMenu(chatId);
+    return;
+  }
+
+  await sendMessage(
+    chatId,
+    ticketCard(active, result.ticket),
+    masanielloTicketKeyboard()
+  );
 }
 
 async function handleScheduleStart(
@@ -510,6 +570,39 @@ async function handleAdminButton(
       await sendMessage(chatId, cycleDashboard(active));
     } else {
       await sendMessage(chatId, 'No active cycle.');
+    }
+    await showMasanielloMenu(chatId);
+  } else if (data === 'a_mas_next') {
+    const active = await getActiveCycle();
+    if (!active) {
+      await sendMessage(chatId, 'No active cycle.');
+      await showMasanielloMenu(chatId);
+    } else if (await getOpenTicket(active.id)) {
+      await sendMessage(chatId, 'There is already an open ticket:');
+      await showOpenTicket(chatId, active);
+    } else {
+      await sendForceReply(chatId, PROMPTS.masTicket);
+    }
+  } else if (data === 'a_mas_ticket') {
+    const active = await getActiveCycle();
+    if (!active) {
+      await sendMessage(chatId, 'No active cycle.');
+      await showMasanielloMenu(chatId);
+    } else {
+      await showOpenTicket(chatId, active);
+    }
+  } else if (data === 'a_mas_discard') {
+    const active = await getActiveCycle();
+    if (!active) {
+      await sendMessage(chatId, 'No active cycle.');
+    } else {
+      const ok = await discardOpenTicket(active.id);
+      await sendMessage(
+        chatId,
+        ok
+          ? 'Ticket discarded. Your bankroll is unchanged.'
+          : 'No open ticket to discard.'
+      );
     }
     await showMasanielloMenu(chatId);
   } else if (data === 'a_mas_cancel') {
@@ -843,6 +936,8 @@ export async function POST(req: Request) {
           await handleEngagementReply(chatId, promptCommand, text);
         } else if (promptCommand === 'mas_new') {
           await handleMasanielloNew(chatId, from.id, text);
+        } else if (promptCommand === 'mas_ticket') {
+          await handleMasanielloTicket(chatId, text);
         } else {
           await handleAdminCommand(chatId, from.id, promptCommand, parts);
           await showAdminMenu(chatId);

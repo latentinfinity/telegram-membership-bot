@@ -19,6 +19,8 @@ export const PROMPTS = {
     'Send max replies per day,cooldown minutes.\nExample: 20,3',
   masNew:
     'Send the new cycle as: bankroll,N,K,odds\nExample: 1000,5,3,2.00\n(bankroll in naira, N = total bets, K = wins needed, odds = reference odds)',
+  masTicket:
+    'Send the next ticket as: odds | prediction\nExample: 1.85 | Arsenal & Chelsea over 1.5\n(odds = final odds of this ticket, single or combined; the prediction text is optional)',
 };
 
 export const PROMPT_COMMANDS: Record<string, string> = {
@@ -34,6 +36,7 @@ export const PROMPT_COMMANDS: Record<string, string> = {
   [PROMPTS.engCaps]: 'eng_caps',
   [PROMPTS.engReplyLimits]: 'eng_reply_limits',
   [PROMPTS.masNew]: 'mas_new',
+  [PROMPTS.masTicket]: 'mas_ticket',
 };
 
 export function userMenu(isAdminUser: boolean): InlineKeyboard {
@@ -138,9 +141,17 @@ export function engagementMenu(
   ];
 }
 
-export function masanielloMenu(hasActiveCycle: boolean): InlineKeyboard {
+export function masanielloMenu(
+  hasActiveCycle: boolean,
+  hasOpenTicket: boolean = false
+): InlineKeyboard {
   const rows: InlineKeyboard = [];
   if (hasActiveCycle) {
+    if (hasOpenTicket) {
+      rows.push([{ text: '🎟 View Open Ticket', callback_data: 'a_mas_ticket' }]);
+    } else {
+      rows.push([{ text: '🎟 Next Ticket', callback_data: 'a_mas_next' }]);
+    }
     rows.push([{ text: '📊 View Active Cycle', callback_data: 'a_mas_view' }]);
     rows.push([{ text: '🚫 Cancel Active Cycle', callback_data: 'a_mas_cancel' }]);
   } else {
@@ -148,6 +159,13 @@ export function masanielloMenu(hasActiveCycle: boolean): InlineKeyboard {
   }
   rows.push([{ text: '⬅️ Admin Panel', callback_data: 'admin_menu' }]);
   return rows;
+}
+
+export function masanielloTicketKeyboard(): InlineKeyboard {
+  return [
+    [{ text: '🗑 Discard Ticket', callback_data: 'a_mas_discard' }],
+    [{ text: '⬅️ Masaniello Menu', callback_data: 'a_mas_menu' }],
+  ];
 }
 
 export function masanielloCancelConfirm(): InlineKeyboard {
