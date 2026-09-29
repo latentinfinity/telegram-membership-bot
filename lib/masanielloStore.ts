@@ -7,6 +7,8 @@
 import { createAdminClient } from '@/lib/supabase/admin';
 import {
   CycleState,
+  CycleStatus,
+  SettleResult,
   cycleStatus,
   formatNaira,
   initialState,
@@ -245,6 +247,196 @@ export async function discardOpenTicket(cycleId: string): Promise<boolean> {
     return false;
   }
   return (data ?? []).length > 0;
+}
+
+// ── Settlement ────────────────────────────────────────────────────────────
+
+function mapStatus(s: CycleStatus): MasCycleStatus {
+  if (s === 'ACHIEVED') return 'achieved';
+  if (s === 'NOT_ACHIEVED') return 'not_achieved';
+  if (s === 'INFEASIBLE') return 'infeasible';
+  return 'active';
+}
+
+function signedNaira(kobo: number): string {
+  if (kobo > 0) return '+' + formatNaira(kobo);
+  if (kobo < 0) return '-' + formatNaira(-kobo);
+  return formatNaira(0);
+}
+
+export type SettleOutcome =
+  | { ok: true; summary: string; newStatus: MasCycleStatus }
+  | { ok: false; error: string };
+
+// Settles the OPEN ticket as win / loss / void.
+//  1. The ticket is claimed atomically (open -> result), so a double tap
+//     or a stale button can never settle it twice.
+//  2. The cycle is then updated with an optimistic lock (it only updates
+//     if it is still exactly in the state the ticket was created from).
+//  3. If step 2 fails, the ticket is put back to open.
+// Void: stake returned, the cycle state is unchanged, no bet is used.
+export async function settleTicket(
+  cycle: MasCycle,
+  ticketId: string,
+  result: SettleResult
+): Promise<SettleOutcome> {
+  if (cycle.status !== 'active') {
+    return { ok: false, error: 'This cycle is not active.' };
+  }
+
+  const supabase = createAdminClient();
+  const { data: t, error: tErr } = await supabase
+    .from('masaniello_tickets')
+    .select('*')
+    .eq('id', ticketId)
+    .eq('cycle_id', cycle.id)
+    .maybeSingle();
+  if (tErr) {
+    console.error('settleTicket lookup failed', tErr);
+    return { ok: false, error: 'Could not load the ticket. Try again.' };
+  }
+  const ticket = t as MasTicket | null;
+  if (!ticket) {
+    return { ok: false, error: 'That ticket no longer exists.' };
+  }
+  if (ticket.status !== 'open') {
+    return {
+      ok: false,
+      error: 'This ticket was already settled (' + ticket.status + '). Nothing changed.',
+    };
+  }
+
+  const state = cycleToState(cycle);
+  if (
+    Number(ticket.bankroll_before_kobo) !== state.bankrollKobo ||
+    ticket.bets_left_before !== state.betsLeft ||
+    ticket.wins_needed_before !== state.winsNeeded
+  ) {
+    return {
+      ok: false,
+      error: 'The cycle changed since this ticket was created. Discard it and enter it again.',
+    };
+  }
+
+  const stake = Number(ticket.stake_kobo);
+  const out = settle(state, result, stake, ticket.odds_h);
+  const next = out.state;
+  const newStatus = mapStatus(out.status);
+  const now = new Date().toISOString();
+
+  const { data: claimed, error: claimErr } = await supabase
+    .from('masaniello_tickets')
+    .update({
+      status: result,
+      bankroll_after_kobo: next.bankrollKobo,
+      settled_at: now,
+    })
+    .eq('id', ticket.id)
+    .eq('status', 'open')
+    .select('id');
+  if (claimErr) {
+    console.error('settleTicket claim failed', claimErr);
+    return { ok: false, error: 'Could not settle the ticket. Try again.' };
+  }
+  if (!claimed || claimed.length === 0) {
+    return { ok: false, error: 'This ticket was already settled. Nothing changed.' };
+  }
+
+  const { data: upd, error: updErr } = await supabase
+    .from('masaniello_cycles')
+    .update({
+      bankroll_kobo: next.bankrollKobo,
+      bets_left: next.betsLeft,
+      wins_needed: next.winsNeeded,
+      status: newStatus,
+      updated_at: now,
+      closed_at: newStatus === 'active' ? null : now,
+    })
+    .eq('id', cycle.id)
+    .eq('status', 'active')
+    .eq('bankroll_kobo', cycle.bankroll_kobo)
+    .eq('bets_left', cycle.bets_left)
+    .eq('wins_needed', cycle.wins_needed)
+    .select('id');
+
+  if (updErr || !upd || upd.length === 0) {
+    console.error('settleTicket cycle update failed', updErr);
+    const { error: revertErr } = await supabase
+      .from('masaniello_tickets')
+      .update({ status: 'open', bankroll_after_kobo: null, settled_at: null })
+      .eq('id', ticket.id);
+    if (revertErr) console.error('settleTicket revert failed', revertErr);
+    return { ok: false, error: 'Could not update the cycle. The ticket was left open. Try again.' };
+  }
+
+  return {
+    ok: true,
+    newStatus,
+    summary: settlementSummary(cycle, ticket, result, next, newStatus),
+  };
+}
+
+function settlementSummary(
+  cycle: MasCycle,
+  ticket: MasTicket,
+  result: SettleResult,
+  next: CycleState,
+  newStatus: MasCycleStatus
+): string {
+  const before = Number(ticket.bankroll_before_kobo);
+  const initial = Number(cycle.initial_bankroll_kobo);
+  const lines: string[] = [];
+
+  if (result === 'void') {
+    lines.push('🎟 Ticket #' + ticket.ticket_no + ' settled: VOID ➖');
+    lines.push('Stake ' + formatNaira(Number(ticket.stake_kobo)) + ' returned. No bet was used.');
+    lines.push('Bankroll unchanged: ' + formatNaira(next.bankrollKobo));
+    lines.push('Bets left: ' + next.betsLeft + ' of ' + cycle.total_bets);
+    lines.push('You can enter another ticket.');
+    return lines.join('\n');
+  }
+
+  lines.push(
+    '🎟 Ticket #' + ticket.ticket_no + ' settled: ' +
+      (result === 'win' ? 'WIN ✅' : 'LOSS ❌')
+  );
+  lines.push(
+    'Odds ' + (ticket.odds_h / 100).toFixed(2) + ', stake ' +
+      formatNaira(Number(ticket.stake_kobo))
+  );
+  lines.push(
+    'Bankroll: ' + formatNaira(before) + ' → ' + formatNaira(next.bankrollKobo)
+  );
+
+  if (newStatus === 'achieved') {
+    const used = cycle.total_bets - next.betsLeft;
+    lines.push('');
+    lines.push('🏆 TARGET ACHIEVED after ' + used + ' bets.');
+    lines.push('Final bankroll: ' + formatNaira(next.bankrollKobo));
+    lines.push('Result vs starting bankroll: ' + signedNaira(next.bankrollKobo - initial));
+    lines.push('The cycle is closed. You can start a new one.');
+  } else if (newStatus === 'not_achieved') {
+    lines.push('');
+    lines.push('❌ TARGET NOT ACHIEVED.');
+    lines.push('Final bankroll: ' + formatNaira(next.bankrollKobo));
+    lines.push('Result vs starting bankroll: ' + signedNaira(next.bankrollKobo - initial));
+    lines.push('The cycle is closed. You can start a new one.');
+  } else if (newStatus === 'infeasible') {
+    lines.push('');
+    lines.push('⚠️ TARGET INFEASIBLE: the bankroll is below the ₦1 minimum stake.');
+    lines.push('Final bankroll: ' + formatNaira(next.bankrollKobo));
+    lines.push('Result vs starting bankroll: ' + signedNaira(next.bankrollKobo - initial));
+    lines.push('The cycle is closed. You can start a new one.');
+  } else {
+    lines.push('Bets left: ' + next.betsLeft + ' of ' + cycle.total_bets);
+    lines.push('Wins needed: ' + next.winsNeeded + ' of ' + cycle.wins_required);
+    lines.push(
+      'Projected return now: ' + formatNaira(targetReturnKobo(next, cycle.ref_odds_h))
+    );
+    lines.push('');
+    lines.push('Ready for the next ticket.');
+  }
+  return lines.join('\n');
 }
 
 // ── Text views ────────────────────────────────────────────────────────────

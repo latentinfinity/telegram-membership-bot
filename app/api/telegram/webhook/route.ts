@@ -19,6 +19,7 @@ import {
   masanielloMenu,
   masanielloCancelConfirm,
   masanielloTicketKeyboard,
+  masanielloSettleConfirm,
   sendForceReply,
 } from '@/lib/menus';
 import {
@@ -58,7 +59,12 @@ import {
 } from '@/lib/channelProfile';
 import { handleDiscussionMessage, generateReply } from '@/lib/replies';
 import { getEngagementSummary } from '@/lib/engagementStats';
-import { describeCycle, parseNairaToKobo, parseOdds } from '@/lib/masaniello';
+import {
+  describeCycle,
+  parseNairaToKobo,
+  parseOdds,
+  formatNaira,
+} from '@/lib/masaniello';
 import {
   getActiveCycle,
   createCycle,
@@ -68,6 +74,7 @@ import {
   createTicket,
   discardOpenTicket,
   ticketCard,
+  settleTicket,
 } from '@/lib/masanielloStore';
 import type { MasCycle } from '@/lib/masanielloStore';
 
@@ -411,6 +418,71 @@ async function handleMasanielloTicket(chatId: number, rawText: string) {
   );
 }
 
+// Step 1 of settling: ask for confirmation (Win / Loss / Void tapped).
+async function handleMasanielloSettleAsk(
+  chatId: number,
+  result: 'win' | 'loss' | 'void'
+) {
+  const active = await getActiveCycle();
+  if (!active) {
+    await sendMessage(chatId, 'There is no active cycle.');
+    await showMasanielloMenu(chatId);
+    return;
+  }
+  const ticket = await getOpenTicket(active.id);
+  if (!ticket) {
+    await sendMessage(chatId, 'There is no open ticket to settle.');
+    await showMasanielloMenu(chatId);
+    return;
+  }
+  const what =
+    result === 'void'
+      ? 'The stake is returned and no bet is used.'
+      : 'This cannot be undone.';
+  await sendMessage(
+    chatId,
+    'Settle ticket #' + ticket.ticket_no +
+      ' (odds ' + (ticket.odds_h / 100).toFixed(2) +
+      ', stake ' + formatNaira(Number(ticket.stake_kobo)) +
+      ') as ' + result.toUpperCase() + '?\n' + what,
+    masanielloSettleConfirm(result, ticket.id)
+  );
+}
+
+// Step 2 of settling: the confirm button (data = a_mas_do_<result>_<ticketId>).
+async function handleMasanielloSettleDo(chatId: number, data: string) {
+  const rest = data.slice('a_mas_do_'.length);
+  const sep = rest.indexOf('_');
+  const resultRaw = sep === -1 ? '' : rest.slice(0, sep);
+  const ticketId = sep === -1 ? '' : rest.slice(sep + 1);
+
+  if (
+    (resultRaw !== 'win' && resultRaw !== 'loss' && resultRaw !== 'void') ||
+    !ticketId
+  ) {
+    await sendMessage(chatId, 'That button is not valid. Nothing changed.');
+    await showMasanielloMenu(chatId);
+    return;
+  }
+
+  const active = await getActiveCycle();
+  if (!active) {
+    await sendMessage(chatId, 'There is no active cycle. Nothing changed.');
+    await showMasanielloMenu(chatId);
+    return;
+  }
+
+  const outcome = await settleTicket(active, ticketId, resultRaw);
+  if (!outcome.ok) {
+    await sendMessage(chatId, '❌ ' + outcome.error);
+    await showMasanielloMenu(chatId);
+    return;
+  }
+
+  await sendMessage(chatId, outcome.summary);
+  await showMasanielloMenu(chatId);
+}
+
 async function handleScheduleStart(
   chatId: number,
   adminId: number,
@@ -591,6 +663,14 @@ async function handleAdminButton(
     } else {
       await showOpenTicket(chatId, active);
     }
+  } else if (data === 'a_mas_win') {
+    await handleMasanielloSettleAsk(chatId, 'win');
+  } else if (data === 'a_mas_loss') {
+    await handleMasanielloSettleAsk(chatId, 'loss');
+  } else if (data === 'a_mas_void') {
+    await handleMasanielloSettleAsk(chatId, 'void');
+  } else if (data.startsWith('a_mas_do_')) {
+    await handleMasanielloSettleDo(chatId, data);
   } else if (data === 'a_mas_discard') {
     const active = await getActiveCycle();
     if (!active) {
@@ -1053,3 +1133,4 @@ export async function POST(req: Request) {
 
   return NextResponse.json({ ok: true });
 }
+ 

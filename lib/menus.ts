@@ -161,10 +161,33 @@ export function masanielloMenu(
   return rows;
 }
 
+// Buttons under an open ticket: settle it, discard it, or go back.
 export function masanielloTicketKeyboard(): InlineKeyboard {
   return [
+    [
+      { text: '✅ Win', callback_data: 'a_mas_win' },
+      { text: '❌ Loss', callback_data: 'a_mas_loss' },
+      { text: '➖ Void', callback_data: 'a_mas_void' },
+    ],
     [{ text: '🗑 Discard Ticket', callback_data: 'a_mas_discard' }],
     [{ text: '⬅️ Masaniello Menu', callback_data: 'a_mas_menu' }],
+  ];
+}
+
+// Confirmation step before settling. The ticket id is inside the button,
+// so an old message can only ever settle the ticket it was made for.
+export function masanielloSettleConfirm(
+  result: 'win' | 'loss' | 'void',
+  ticketId: string
+): InlineKeyboard {
+  return [
+    [
+      {
+        text: '✅ Yes, settle as ' + result.toUpperCase(),
+        callback_data: 'a_mas_do_' + result + '_' + ticketId,
+      },
+    ],
+    [{ text: '↩️ No, go back', callback_data: 'a_mas_ticket' }],
   ];
 }
 
