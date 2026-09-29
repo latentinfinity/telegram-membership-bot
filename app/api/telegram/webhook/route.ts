@@ -55,6 +55,7 @@ import {
 } from '@/lib/channelProfile';
 import { handleDiscussionMessage, generateReply } from '@/lib/replies';
 import { getEngagementSummary } from '@/lib/engagementStats';
+import { describeCycle, parseNairaToKobo, parseOdds } from '@/lib/masaniello';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
@@ -794,6 +795,29 @@ export async function POST(req: Request) {
                   '✅ (' + r.provider + ') Would reply:\n\n' + r.text
                 );
               }
+            }
+          }
+        }
+      } else if (command === '/testmas') {
+        if (chatType === 'private' && from && isAdmin(from.id)) {
+          const usage =
+            'Usage: /testmas bankroll,N,K,odds\nExample: /testmas 1000,5,3,2.00';
+          const fields = args.join('').split(',');
+          if (fields.length !== 4) {
+            await sendMessage(chatId, usage);
+          } else {
+            const bankKobo = parseNairaToKobo(fields[0]);
+            const n = /^\d+$/.test(fields[1]) ? parseInt(fields[1], 10) : NaN;
+            const k = /^\d+$/.test(fields[2]) ? parseInt(fields[2], 10) : NaN;
+            const oddsH = parseOdds(fields[3]);
+            if (bankKobo === null || isNaN(n) || isNaN(k) || oddsH === null) {
+              await sendMessage(
+                chatId,
+                'Could not read that. Bankroll in naira, N and K whole numbers, odds like 2.00.\n\n' +
+                  usage
+              );
+            } else {
+              await sendMessage(chatId, describeCycle(bankKobo, n, k, oddsH));
             }
           }
         }
