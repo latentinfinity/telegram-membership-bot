@@ -16,6 +16,8 @@ import {
   adminMenu,
   channelMenu,
   engagementMenu,
+  masanielloMenu,
+  masanielloCancelConfirm,
   sendForceReply,
 } from '@/lib/menus';
 import {
@@ -56,6 +58,12 @@ import {
 import { handleDiscussionMessage, generateReply } from '@/lib/replies';
 import { getEngagementSummary } from '@/lib/engagementStats';
 import { describeCycle, parseNairaToKobo, parseOdds } from '@/lib/masaniello';
+import {
+  getActiveCycle,
+  createCycle,
+  cancelActiveCycle,
+  cycleDashboard,
+} from '@/lib/masanielloStore';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
@@ -289,6 +297,60 @@ async function showEngagementMenu(chatId: number) {
   );
 }
 
+async function showMasanielloMenu(chatId: number) {
+  const active = await getActiveCycle();
+  await sendMessage(
+    chatId,
+    active ? 'Masaniello: a cycle is active.' : 'Masaniello: no active cycle.',
+    masanielloMenu(!!active)
+  );
+}
+
+async function handleMasanielloNew(
+  chatId: number,
+  adminId: number,
+  rawText: string
+) {
+  const fields = rawText.replace(/\s+/g, '').split(',');
+  if (fields.length !== 4) {
+    await sendMessage(
+      chatId,
+      'Could not read that. Send: bankroll,N,K,odds\nExample: 1000,5,3,2.00'
+    );
+    await showMasanielloMenu(chatId);
+    return;
+  }
+  const bankKobo = parseNairaToKobo(fields[0]);
+  const n = /^\d+$/.test(fields[1]) ? parseInt(fields[1], 10) : NaN;
+  const k = /^\d+$/.test(fields[2]) ? parseInt(fields[2], 10) : NaN;
+  const oddsH = parseOdds(fields[3]);
+  if (bankKobo === null || isNaN(n) || isNaN(k) || oddsH === null) {
+    await sendMessage(
+      chatId,
+      'Could not read that. Bankroll in naira, N and K whole numbers, odds like 2.00.\nExample: 1000,5,3,2.00'
+    );
+    await showMasanielloMenu(chatId);
+    return;
+  }
+
+  const result = await createCycle({
+    createdBy: adminId,
+    bankrollKobo: bankKobo,
+    totalBets: n,
+    winsRequired: k,
+    refOddsH: oddsH,
+  });
+
+  if (!result.ok) {
+    await sendMessage(chatId, '❌ ' + result.error);
+    await showMasanielloMenu(chatId);
+    return;
+  }
+
+  await sendMessage(chatId, 'Cycle created.\n\n' + cycleDashboard(result.cycle));
+  await showMasanielloMenu(chatId);
+}
+
 async function handleScheduleStart(
   chatId: number,
   adminId: number,
@@ -428,6 +490,44 @@ async function handleAdminButton(
       await sendMessage(chatId, next ? 'AI replies enabled.' : 'AI replies disabled.');
     }
     await showEngagementMenu(chatId);
+  } else if (data === 'a_mas_menu') {
+    await clearDraft(adminId);
+    await showMasanielloMenu(chatId);
+  } else if (data === 'a_mas_new') {
+    const active = await getActiveCycle();
+    if (active) {
+      await sendMessage(
+        chatId,
+        'A cycle is already active. Finish or cancel it before starting a new one.'
+      );
+      await showMasanielloMenu(chatId);
+    } else {
+      await sendForceReply(chatId, PROMPTS.masNew);
+    }
+  } else if (data === 'a_mas_view') {
+    const active = await getActiveCycle();
+    if (active) {
+      await sendMessage(chatId, cycleDashboard(active));
+    } else {
+      await sendMessage(chatId, 'No active cycle.');
+    }
+    await showMasanielloMenu(chatId);
+  } else if (data === 'a_mas_cancel') {
+    const active = await getActiveCycle();
+    if (!active) {
+      await sendMessage(chatId, 'No active cycle to cancel.');
+      await showMasanielloMenu(chatId);
+    } else {
+      await sendMessage(
+        chatId,
+        'Cancel the active cycle? This cannot be undone.\n\n' + cycleDashboard(active),
+        masanielloCancelConfirm()
+      );
+    }
+  } else if (data === 'a_mas_cancel_yes') {
+    const ok = await cancelActiveCycle();
+    await sendMessage(chatId, ok ? 'Cycle cancelled.' : 'No active cycle to cancel.');
+    await showMasanielloMenu(chatId);
   } else if (data === 'sched_skip_photo') {
     await setPhoto(adminId, null, 'awaiting_caption');
     await sendMessage(chatId, 'Send the text for the post.');
@@ -741,6 +841,8 @@ export async function POST(req: Request) {
         const promptCommand = PROMPT_COMMANDS[replyText];
         if (promptCommand.startsWith('eng_')) {
           await handleEngagementReply(chatId, promptCommand, text);
+        } else if (promptCommand === 'mas_new') {
+          await handleMasanielloNew(chatId, from.id, text);
         } else {
           await handleAdminCommand(chatId, from.id, promptCommand, parts);
           await showAdminMenu(chatId);

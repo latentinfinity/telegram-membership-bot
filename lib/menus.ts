@@ -17,6 +17,8 @@ export const PROMPTS = {
   engCaps: 'Send max posts,max polls per day.\nExample: 3,1',
   engReplyLimits:
     'Send max replies per day,cooldown minutes.\nExample: 20,3',
+  masNew:
+    'Send the new cycle as: bankroll,N,K,odds\nExample: 1000,5,3,2.00\n(bankroll in naira, N = total bets, K = wins needed, odds = reference odds)',
 };
 
 export const PROMPT_COMMANDS: Record<string, string> = {
@@ -31,6 +33,7 @@ export const PROMPT_COMMANDS: Record<string, string> = {
   [PROMPTS.engWindow]: 'eng_window',
   [PROMPTS.engCaps]: 'eng_caps',
   [PROMPTS.engReplyLimits]: 'eng_reply_limits',
+  [PROMPTS.masNew]: 'mas_new',
 };
 
 export function userMenu(isAdminUser: boolean): InlineKeyboard {
@@ -71,6 +74,7 @@ export function adminMenu(): InlineKeyboard {
     ],
     [{ text: '📢 Channel', callback_data: 'a_channel_menu' }],
     [{ text: '🤖 Engagement', callback_data: 'a_engagement_menu' }],
+    [{ text: '🎯 Masaniello', callback_data: 'a_mas_menu' }],
     [{ text: '⚙️ Run Daily Job', callback_data: 'a_runcron' }],
     [{ text: '⬅️ Back to Menu', callback_data: 'menu' }],
   ];
@@ -131,6 +135,27 @@ export function engagementMenu(
       },
     ],
     [{ text: '⬅️ Admin Panel', callback_data: 'admin_menu' }],
+  ];
+}
+
+export function masanielloMenu(hasActiveCycle: boolean): InlineKeyboard {
+  const rows: InlineKeyboard = [];
+  if (hasActiveCycle) {
+    rows.push([{ text: '📊 View Active Cycle', callback_data: 'a_mas_view' }]);
+    rows.push([{ text: '🚫 Cancel Active Cycle', callback_data: 'a_mas_cancel' }]);
+  } else {
+    rows.push([{ text: '➕ New Cycle', callback_data: 'a_mas_new' }]);
+  }
+  rows.push([{ text: '⬅️ Admin Panel', callback_data: 'admin_menu' }]);
+  return rows;
+}
+
+export function masanielloCancelConfirm(): InlineKeyboard {
+  return [
+    [
+      { text: '✅ Yes, cancel it', callback_data: 'a_mas_cancel_yes' },
+      { text: '↩️ No, keep it', callback_data: 'a_mas_menu' },
+    ],
   ];
 }
 
