@@ -20,6 +20,9 @@ import {
   masanielloCancelConfirm,
   masanielloTicketKeyboard,
   masanielloSettleConfirm,
+  masanielloHistoryKeyboard,
+  masanielloHistoryDetailKeyboard,
+  masanielloUndoConfirm,
   sendForceReply,
 } from '@/lib/menus';
 import {
@@ -75,6 +78,12 @@ import {
   discardOpenTicket,
   ticketCard,
   settleTicket,
+  getRecentCycles,
+  getCycleById,
+  getCycleTickets,
+  cycleDetail,
+  historyLabel,
+  undoLastSettlement,
 } from '@/lib/masanielloStore';
 import type { MasCycle } from '@/lib/masanielloStore';
 
@@ -313,8 +322,13 @@ async function showEngagementMenu(chatId: number) {
 async function showMasanielloMenu(chatId: number) {
   const active = await getActiveCycle();
   let hasOpen = false;
+  let undoCycleId: string | null = null;
   if (active) {
-    hasOpen = !!(await getOpenTicket(active.id));
+    const tickets = await getCycleTickets(active.id);
+    hasOpen = tickets.some((t) => t.status === 'open');
+    if (!hasOpen && tickets.length > 0) {
+      undoCycleId = active.id;
+    }
   }
   await sendMessage(
     chatId,
@@ -323,7 +337,7 @@ async function showMasanielloMenu(chatId: number) {
         ? 'Masaniello: a cycle is active and a ticket is open.'
         : 'Masaniello: a cycle is active.'
       : 'Masaniello: no active cycle.',
-    masanielloMenu(!!active, hasOpen)
+    masanielloMenu(!!active, hasOpen, undoCycleId)
   );
 }
 
@@ -438,7 +452,7 @@ async function handleMasanielloSettleAsk(
   const what =
     result === 'void'
       ? 'The stake is returned and no bet is used.'
-      : 'This cannot be undone.';
+      : 'You can still undo the last settlement afterwards if you tap the wrong one.';
   await sendMessage(
     chatId,
     'Settle ticket #' + ticket.ticket_no +
@@ -481,6 +495,89 @@ async function handleMasanielloSettleDo(chatId: number, data: string) {
 
   await sendMessage(chatId, outcome.summary);
   await showMasanielloMenu(chatId);
+}
+
+// History list: the last 10 cycles, newest first.
+async function handleMasanielloHistory(chatId: number) {
+  const cycles = await getRecentCycles(10);
+  if (cycles.length === 0) {
+    await sendMessage(chatId, 'No cycles yet.');
+    await showMasanielloMenu(chatId);
+    return;
+  }
+  await sendMessage(
+    chatId,
+    'Recent cycles (newest first). Tap one to see its tickets.',
+    masanielloHistoryKeyboard(
+      cycles.map((c) => ({ id: c.id, label: historyLabel(c) }))
+    )
+  );
+}
+
+// Detail of one past (or current) cycle.
+async function handleMasanielloHistoryDetail(chatId: number, cycleId: string) {
+  const cycle = await getCycleById(cycleId);
+  if (!cycle) {
+    await sendMessage(chatId, 'Cycle not found.');
+    await showMasanielloMenu(chatId);
+    return;
+  }
+  const tickets = await getCycleTickets(cycle.id);
+  const canUndo =
+    cycle.status === 'achieved' ||
+    cycle.status === 'not_achieved' ||
+    cycle.status === 'infeasible';
+  await sendMessage(
+    chatId,
+    cycleDetail(cycle, tickets),
+    masanielloHistoryDetailKeyboard(cycle.id, canUndo)
+  );
+}
+
+// Undo step 1: ask for confirmation.
+async function handleMasanielloUndoAsk(chatId: number, cycleId: string) {
+  const cycle = await getCycleById(cycleId);
+  if (!cycle) {
+    await sendMessage(chatId, 'Cycle not found.');
+    await showMasanielloMenu(chatId);
+    return;
+  }
+  const tickets = await getCycleTickets(cycle.id);
+  const last = tickets.length > 0 ? tickets[tickets.length - 1] : null;
+  if (!last || last.status === 'open') {
+    await sendMessage(
+      chatId,
+      'Nothing to undo. If a ticket is open, settle or discard it first.'
+    );
+    await showMasanielloMenu(chatId);
+    return;
+  }
+  await sendMessage(
+    chatId,
+    'Undo the last settlement?\n\nTicket #' + last.ticket_no +
+      ' was settled as ' + last.status.toUpperCase() +
+      '. It will become open again and the cycle goes back to a bankroll of ' +
+      formatNaira(Number(last.bankroll_before_kobo)) +
+      '.\n\nYou can then settle it correctly or discard it.',
+    masanielloUndoConfirm(cycle.id)
+  );
+}
+
+// Undo step 2: do it.
+async function handleMasanielloUndoDo(chatId: number, cycleId: string) {
+  const outcome = await undoLastSettlement(cycleId);
+  if (!outcome.ok) {
+    await sendMessage(chatId, '❌ ' + outcome.error);
+    await showMasanielloMenu(chatId);
+    return;
+  }
+  await sendMessage(chatId, outcome.message);
+  const active = await getActiveCycle();
+  if (active) {
+    await showOpenTicket(chatId, active);
+  } else {
+    await showMasanielloMenu(chatId);
+  }
 }
 
 async function handleScheduleStart(
@@ -671,6 +768,14 @@ async function handleAdminButton(
     await handleMasanielloSettleAsk(chatId, 'void');
   } else if (data.startsWith('a_mas_do_')) {
     await handleMasanielloSettleDo(chatId, data);
+  } else if (data === 'a_mas_hist') {
+    await handleMasanielloHistory(chatId);
+  } else if (data.startsWith('a_mas_h_')) {
+    await handleMasanielloHistoryDetail(chatId, data.slice('a_mas_h_'.length));
+  } else if (data.startsWith('a_mas_udo_')) {
+    await handleMasanielloUndoDo(chatId, data.slice('a_mas_udo_'.length));
+  } else if (data.startsWith('a_mas_ud_')) {
+    await handleMasanielloUndoAsk(chatId, data.slice('a_mas_ud_'.length));
   } else if (data === 'a_mas_discard') {
     const active = await getActiveCycle();
     if (!active) {
@@ -1133,4 +1238,3 @@ export async function POST(req: Request) {
 
   return NextResponse.json({ ok: true });
 }
- 

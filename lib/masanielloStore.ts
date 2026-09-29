@@ -55,6 +55,7 @@ export type MasTicket = {
   bankroll_after_kobo: number | null;
   bets_left_before: number;
   wins_needed_before: number;
+  reopened_count: number;
   created_at: string;
   settled_at: string | null;
 };
@@ -539,4 +540,241 @@ export function ticketCard(c: MasCycle, t: MasTicket): string {
     );
   }
   return lines.join('\n');
+}
+
+// ── History and corrections ───────────────────────────────────────────────
+
+export async function getCycleById(id: string): Promise<MasCycle | null> {
+  const supabase = createAdminClient();
+  const { data, error } = await supabase
+    .from('masaniello_cycles')
+    .select('*')
+    .eq('id', id)
+    .maybeSingle();
+  if (error) {
+    console.error('getCycleById failed', error);
+    return null;
+  }
+  return (data as MasCycle | null) ?? null;
+}
+
+export async function getRecentCycles(limit: number): Promise<MasCycle[]> {
+  const supabase = createAdminClient();
+  const { data, error } = await supabase
+    .from('masaniello_cycles')
+    .select('*')
+    .order('created_at', { ascending: false })
+    .limit(limit);
+  if (error) {
+    console.error('getRecentCycles failed', error);
+    return [];
+  }
+  return (data ?? []) as MasCycle[];
+}
+
+export async function getCycleTickets(cycleId: string): Promise<MasTicket[]> {
+  const supabase = createAdminClient();
+  const { data, error } = await supabase
+    .from('masaniello_tickets')
+    .select('*')
+    .eq('cycle_id', cycleId)
+    .order('ticket_no', { ascending: true });
+  if (error) {
+    console.error('getCycleTickets failed', error);
+    return [];
+  }
+  return (data ?? []) as MasTicket[];
+}
+
+function shortDate(iso: string): string {
+  return new Date(iso).toLocaleDateString('en-GB', {
+    day: 'numeric',
+    month: 'short',
+    timeZone: 'Africa/Lagos',
+  });
+}
+
+function statusIcon(s: MasCycleStatus): string {
+  if (s === 'achieved') return '✅';
+  if (s === 'not_achieved') return '❌';
+  if (s === 'infeasible') return '⚠️';
+  if (s === 'cancelled') return '🚫';
+  return '🟢';
+}
+
+// Button label for the history list.
+export function historyLabel(c: MasCycle): string {
+  return (
+    statusIcon(c.status) + ' ' + shortDate(c.created_at) + ' · ' +
+    formatNaira(Number(c.initial_bankroll_kobo)) + ' → ' +
+    formatNaira(Number(c.bankroll_kobo))
+  );
+}
+
+// Full detail of one cycle with all its tickets.
+export function cycleDetail(c: MasCycle, tickets: MasTicket[]): string {
+  const initial = Number(c.initial_bankroll_kobo);
+  const now = Number(c.bankroll_kobo);
+  const lines: string[] = [];
+  lines.push('🎯 Cycle from ' + shortDate(c.created_at));
+  lines.push('Status: ' + statusLabel(c.status));
+  lines.push(
+    'N=' + c.total_bets + ', K=' + c.wins_required +
+      ', reference odds ' + (c.ref_odds_h / 100).toFixed(2)
+  );
+  lines.push('Started: ' + formatNaira(initial) + ' → Now: ' + formatNaira(now));
+  if (c.status !== 'active') {
+    lines.push('Result vs start: ' + signedNaira(now - initial));
+  } else {
+    lines.push('Bets left: ' + c.bets_left + ', wins needed: ' + c.wins_needed);
+  }
+  lines.push('');
+  if (tickets.length === 0) {
+    lines.push('No tickets.');
+    return lines.join('\n');
+  }
+  lines.push('Tickets:');
+  let used = lines.join('\n').length;
+  for (let i = 0; i < tickets.length; i++) {
+    const t = tickets[i];
+    const icon =
+      t.status === 'win' ? '✅' : t.status === 'loss' ? '❌' : t.status === 'void' ? '➖' : '⏳';
+    let line =
+      '#' + t.ticket_no + ' ' + icon + ' ' + (t.odds_h / 100).toFixed(2) +
+      ' · stake ' + formatNaira(Number(t.stake_kobo));
+    if (t.status !== 'open' && t.bankroll_after_kobo !== null) {
+      line +=
+        ' · ' + formatNaira(Number(t.bankroll_before_kobo)) + '→' +
+        formatNaira(Number(t.bankroll_after_kobo));
+    }
+    if (t.prediction) line += '\n   ' + t.prediction.slice(0, 60);
+    if (used + line.length + 30 > 3800) {
+      lines.push('... and ' + (tickets.length - i) + ' more tickets');
+      break;
+    }
+    used += line.length + 1;
+    lines.push(line);
+  }
+  return lines.join('\n');
+}
+
+export type UndoOutcome =
+  | { ok: true; message: string }
+  | { ok: false; error: string };
+
+// Undoes the LAST settlement of a cycle. Rules (blocked otherwise):
+//  - the cycle is not cancelled
+//  - if the cycle was closed by that settlement, no other cycle is active
+//  - there is no open ticket (settle or discard it first)
+//  - the cycle still matches exactly what that settlement produced
+// The ticket goes back to OPEN (so it can be settled correctly or
+// discarded) and the cycle returns to its state before that ticket.
+export async function undoLastSettlement(cycleId: string): Promise<UndoOutcome> {
+  const supabase = createAdminClient();
+  const cycle = await getCycleById(cycleId);
+  if (!cycle) return { ok: false, error: 'Cycle not found.' };
+  if (cycle.status === 'cancelled') {
+    return { ok: false, error: 'A cancelled cycle cannot be reopened.' };
+  }
+  if (cycle.status !== 'active') {
+    const other = await getActiveCycle();
+    if (other) {
+      return {
+        ok: false,
+        error: 'Another cycle is active. Finish or cancel it before reopening this one.',
+      };
+    }
+  }
+
+  const tickets = await getCycleTickets(cycle.id);
+  if (tickets.length === 0) return { ok: false, error: 'Nothing to undo.' };
+  if (tickets.some((t) => t.status === 'open')) {
+    return { ok: false, error: 'Settle or discard the open ticket first.' };
+  }
+
+  const last = tickets[tickets.length - 1];
+  const before: CycleState = {
+    bankrollKobo: Number(last.bankroll_before_kobo),
+    betsLeft: last.bets_left_before,
+    winsNeeded: last.wins_needed_before,
+  };
+  const expectedAfter = settle(
+    before,
+    last.status as SettleResult,
+    Number(last.stake_kobo),
+    last.odds_h
+  ).state;
+  const cur = cycleToState(cycle);
+  if (
+    cur.bankrollKobo !== expectedAfter.bankrollKobo ||
+    cur.betsLeft !== expectedAfter.betsLeft ||
+    cur.winsNeeded !== expectedAfter.winsNeeded
+  ) {
+    return {
+      ok: false,
+      error: 'The cycle no longer matches that ticket, so it cannot be undone safely.',
+    };
+  }
+
+  const now = new Date().toISOString();
+  const previousStatus = last.status;
+  const { data: claimed, error: claimErr } = await supabase
+    .from('masaniello_tickets')
+    .update({
+      status: 'open',
+      bankroll_after_kobo: null,
+      settled_at: null,
+      reopened_count: Number(last.reopened_count || 0) + 1,
+    })
+    .eq('id', last.id)
+    .eq('status', previousStatus)
+    .select('id');
+  if (claimErr) {
+    console.error('undo ticket reopen failed', claimErr);
+    return { ok: false, error: 'Could not undo. Nothing changed.' };
+  }
+  if (!claimed || claimed.length === 0) {
+    return { ok: false, error: 'The ticket changed while undoing. Nothing changed.' };
+  }
+
+  const { data: upd, error: updErr } = await supabase
+    .from('masaniello_cycles')
+    .update({
+      bankroll_kobo: before.bankrollKobo,
+      bets_left: before.betsLeft,
+      wins_needed: before.winsNeeded,
+      status: 'active',
+      updated_at: now,
+      closed_at: null,
+    })
+    .eq('id', cycle.id)
+    .eq('status', cycle.status)
+    .eq('bankroll_kobo', cycle.bankroll_kobo)
+    .eq('bets_left', cycle.bets_left)
+    .eq('wins_needed', cycle.wins_needed)
+    .select('id');
+
+  if (updErr || !upd || upd.length === 0) {
+    console.error('undo cycle update failed', updErr);
+    const { error: revertErr } = await supabase
+      .from('masaniello_tickets')
+      .update({
+        status: previousStatus,
+        bankroll_after_kobo: last.bankroll_after_kobo,
+        settled_at: last.settled_at,
+        reopened_count: Number(last.reopened_count || 0),
+      })
+      .eq('id', last.id);
+    if (revertErr) console.error('undo revert failed', revertErr);
+    return { ok: false, error: 'Could not update the cycle. Nothing changed.' };
+  }
+
+  return {
+    ok: true,
+    message:
+      'Undone. Ticket #' + last.ticket_no + ' is open again (it was ' +
+      previousStatus.toUpperCase() + ').\nBankroll back to ' +
+      formatNaira(before.bankrollKobo) + ', bets left ' + before.betsLeft +
+      ', wins needed ' + before.winsNeeded + '.\nSettle it correctly, or discard it.',
+  };
 }

@@ -141,9 +141,12 @@ export function engagementMenu(
   ];
 }
 
+// undoCycleId: pass the active cycle's id when it has a settled ticket and
+// no open ticket, to show the Undo button. Otherwise leave it null.
 export function masanielloMenu(
   hasActiveCycle: boolean,
-  hasOpenTicket: boolean = false
+  hasOpenTicket: boolean = false,
+  undoCycleId: string | null = null
 ): InlineKeyboard {
   const rows: InlineKeyboard = [];
   if (hasActiveCycle) {
@@ -152,11 +155,17 @@ export function masanielloMenu(
     } else {
       rows.push([{ text: '🎟 Next Ticket', callback_data: 'a_mas_next' }]);
     }
+    if (undoCycleId) {
+      rows.push([
+        { text: '↩️ Undo Last Settlement', callback_data: 'a_mas_ud_' + undoCycleId },
+      ]);
+    }
     rows.push([{ text: '📊 View Active Cycle', callback_data: 'a_mas_view' }]);
     rows.push([{ text: '🚫 Cancel Active Cycle', callback_data: 'a_mas_cancel' }]);
   } else {
     rows.push([{ text: '➕ New Cycle', callback_data: 'a_mas_new' }]);
   }
+  rows.push([{ text: '📜 History', callback_data: 'a_mas_hist' }]);
   rows.push([{ text: '⬅️ Admin Panel', callback_data: 'admin_menu' }]);
   return rows;
 }
@@ -197,6 +206,41 @@ export function masanielloCancelConfirm(): InlineKeyboard {
       { text: '✅ Yes, cancel it', callback_data: 'a_mas_cancel_yes' },
       { text: '↩️ No, keep it', callback_data: 'a_mas_menu' },
     ],
+  ];
+}
+
+// List of past cycles: one button per cycle.
+export function masanielloHistoryKeyboard(
+  items: { id: string; label: string }[]
+): InlineKeyboard {
+  const rows: InlineKeyboard = items.map((it) => [
+    { text: it.label, callback_data: 'a_mas_h_' + it.id },
+  ]);
+  rows.push([{ text: '⬅️ Masaniello Menu', callback_data: 'a_mas_menu' }]);
+  return rows;
+}
+
+// Buttons under one cycle's detail. Undo is offered only when the cycle
+// was closed by a settlement (the store re-checks every rule when tapped).
+export function masanielloHistoryDetailKeyboard(
+  cycleId: string,
+  canUndo: boolean
+): InlineKeyboard {
+  const rows: InlineKeyboard = [];
+  if (canUndo) {
+    rows.push([
+      { text: '↩️ Undo Last Settlement', callback_data: 'a_mas_ud_' + cycleId },
+    ]);
+  }
+  rows.push([{ text: '⬅️ History', callback_data: 'a_mas_hist' }]);
+  rows.push([{ text: '⬅️ Masaniello Menu', callback_data: 'a_mas_menu' }]);
+  return rows;
+}
+
+export function masanielloUndoConfirm(cycleId: string): InlineKeyboard {
+  return [
+    [{ text: '✅ Yes, undo it', callback_data: 'a_mas_udo_' + cycleId }],
+    [{ text: '↩️ No, keep it', callback_data: 'a_mas_menu' }],
   ];
 }
 
