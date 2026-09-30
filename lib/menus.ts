@@ -21,6 +21,8 @@ export const PROMPTS = {
     'Send the new cycle as: bankroll,N,K,odds\nExample: 1000,5,3,2.00\n(bankroll in naira, N = total bets, K = wins needed, odds = reference odds)',
   masTicket:
     'Send the next ticket as: odds | prediction\nExample: 1.85 | Arsenal & Chelsea over 1.5\n(odds = final odds of this ticket, single or combined; the prediction text is optional)',
+  predict:
+    'Paste your matches now.\nFormat (time and form are optional):\n1) 20:45 Home - Away\nldlwl,wdwwl,1.2,1.42,2.5,1.6\nThe four numbers are: home scored, home conceded, away scored, away conceded.',
 };
 
 export const PROMPT_COMMANDS: Record<string, string> = {
@@ -37,6 +39,7 @@ export const PROMPT_COMMANDS: Record<string, string> = {
   [PROMPTS.engReplyLimits]: 'eng_reply_limits',
   [PROMPTS.masNew]: 'mas_new',
   [PROMPTS.masTicket]: 'mas_ticket',
+  [PROMPTS.predict]: 'predict',
 };
 
 export function userMenu(isAdminUser: boolean): InlineKeyboard {
@@ -78,6 +81,7 @@ export function adminMenu(): InlineKeyboard {
     [{ text: '📢 Channel', callback_data: 'a_channel_menu' }],
     [{ text: '🤖 Engagement', callback_data: 'a_engagement_menu' }],
     [{ text: '🎯 Masaniello', callback_data: 'a_mas_menu' }],
+    [{ text: '🔮 Predict', callback_data: 'a_predict' }],
     [{ text: '⚙️ Run Daily Job', callback_data: 'a_runcron' }],
     [{ text: '⬅️ Back to Menu', callback_data: 'menu' }],
   ];
@@ -241,6 +245,14 @@ export function masanielloUndoConfirm(cycleId: string): InlineKeyboard {
   return [
     [{ text: '✅ Yes, undo it', callback_data: 'a_mas_udo_' + cycleId }],
     [{ text: '↩️ No, keep it', callback_data: 'a_mas_menu' }],
+  ];
+}
+
+// Buttons under the prediction result.
+export function predictAgainKeyboard(): InlineKeyboard {
+  return [
+    [{ text: '🔮 Predict again', callback_data: 'a_predict' }],
+    [{ text: '⬅️ Admin Panel', callback_data: 'admin_menu' }],
   ];
 }
 

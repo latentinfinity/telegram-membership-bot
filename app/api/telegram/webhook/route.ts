@@ -23,6 +23,7 @@ import {
   masanielloHistoryKeyboard,
   masanielloHistoryDetailKeyboard,
   masanielloUndoConfirm,
+  predictAgainKeyboard,
   sendForceReply,
 } from '@/lib/menus';
 import {
@@ -86,6 +87,7 @@ import {
   undoLastSettlement,
 } from '@/lib/masanielloStore';
 import type { MasCycle } from '@/lib/masanielloStore';
+import { runPrediction, formatPrediction, PREDICT_USAGE } from '@/lib/predict';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
@@ -580,6 +582,19 @@ async function handleMasanielloUndoDo(chatId: number, cycleId: string) {
   }
 }
 
+// Predict: runs the pasted matches through the rule and sends the
+// Home / Draw / Away picks (in several messages if the list is long).
+async function handlePredict(chatId: number, rawText: string) {
+  const chunks = formatPrediction(runPrediction(rawText));
+  for (let i = 0; i < chunks.length; i++) {
+    if (i === chunks.length - 1) {
+      await sendMessage(chatId, chunks[i], predictAgainKeyboard());
+    } else {
+      await sendMessage(chatId, chunks[i]);
+    }
+  }
+}
+
 async function handleScheduleStart(
   chatId: number,
   adminId: number,
@@ -806,6 +821,8 @@ async function handleAdminButton(
     const ok = await cancelActiveCycle();
     await sendMessage(chatId, ok ? 'Cycle cancelled.' : 'No active cycle to cancel.');
     await showMasanielloMenu(chatId);
+  } else if (data === 'a_predict') {
+    await sendForceReply(chatId, PROMPTS.predict);
   } else if (data === 'sched_skip_photo') {
     await setPhoto(adminId, null, 'awaiting_caption');
     await sendMessage(chatId, 'Send the text for the post.');
@@ -1123,6 +1140,8 @@ export async function POST(req: Request) {
           await handleMasanielloNew(chatId, from.id, text);
         } else if (promptCommand === 'mas_ticket') {
           await handleMasanielloTicket(chatId, text);
+        } else if (promptCommand === 'predict') {
+          await handlePredict(chatId, text);
         } else {
           await handleAdminCommand(chatId, from.id, promptCommand, parts);
           await showAdminMenu(chatId);
@@ -1201,6 +1220,19 @@ export async function POST(req: Request) {
             } else {
               await sendMessage(chatId, describeCycle(bankKobo, n, k, oddsH));
             }
+          }
+        }
+      } else if (command === '/predict') {
+        if (chatType === 'private' && from && isAdmin(from.id)) {
+          const dataText = text.slice(parts[0].length).trim();
+          if (!dataText) {
+            await sendMessage(
+              chatId,
+              'Tap 🔮 Predict in the Admin Panel, or send /predict followed by your matches.\n\n' +
+                PREDICT_USAGE
+            );
+          } else {
+            await handlePredict(chatId, dataText);
           }
         }
       } else if (ADMIN_COMMANDS.includes(command)) {
