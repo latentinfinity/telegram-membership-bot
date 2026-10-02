@@ -18,6 +18,17 @@
 //   otherwise                   -> no pick
 //   Needs b1 > 0 and b2 > 0 (it divides by them).
 //
+// CONFIDENCE of a Home / Draw / Away call:
+//   The rule above decides the pick. The confidence is the model chance
+//   of that same result, with home goals ~ Poisson(eH) and away goals
+//   ~ Poisson(eA), independent:
+//     eH = (a1 + b2) / 2        eA = (b1 + a2) / 2
+//   Home = P(home goals > away goals), Draw = P(equal),
+//   Away = P(away goals > home goals).
+//   No boost. A Draw is rarely the single most likely result, so Draw
+//   calls always show a low percentage. This is a model estimate, not a
+//   measured hit rate.
+//
 // RULE 2 — Over 2.5, main formula (owner-defined):
 //   expectedHome = (a1 + b2) / 2        expectedAway = (b1 + a2) / 2
 //   factorHome   = min(b2 / a1, 1)      factorAway   = min(a2 / b1, 1)
@@ -41,14 +52,19 @@
 // Exact decimal arithmetic (BigInt fractions) is used for every
 // comparison, so a match sitting exactly on a boundary (R = 2, 0.5,
 // 1.09375, 1.40625, T1 = 3 or T2 = 3) is classified correctly and never
-// misses it through floating-point error. The Poisson chance itself is
-// a normal floating-point number.
+// misses it through floating-point error. The Poisson chances are
+// normal floating-point numbers.
 // No BigInt literals (1n) are used, so it compiles on any TS target.
 // ═══════════════════════════════════════════════════════════════
 
 export type PredictSide = 'Home' | 'Draw' | 'Away';
 
-export type OutcomeCall = { num: number; name: string; side: PredictSide };
+export type OutcomeCall = {
+  num: number;
+  name: string;
+  side: PredictSide;
+  confidence: number; // model chance of that result, 0..1
+};
 
 export type OverCall = {
   num: number;
@@ -64,7 +80,7 @@ export type PredictSkip = { num: number; reason: string };
 
 export type PredictResult = {
   checked: number; // matches that were readable and evaluated
-  outcomes: OutcomeCall[]; // Home / Draw / Away calls, in input order
+  outcomes: OutcomeCall[]; // Home / Draw / Away calls, highest confidence first
   overs: OverCall[]; // Over 2.5 calls, highest confidence first
   skipped: PredictSkip[]; // unreadable matches
   noSide: number[]; // Home/Draw/Away could not be calculated (zero in b1 or b2)
@@ -167,6 +183,84 @@ function sideOf(r: Q): PredictSide | null {
   return null;
 }
 
+// ── Outcome chances (Poisson, independent home and away goals) ────────────
+// Up to EXACT_LIMIT expected goals per side the chances are summed exactly
+// over the goal grid. Above that (absurd for football, only reachable by
+// typing huge averages) a normal approximation of the goal difference is
+// used, so the result is always a finite number between 0 and 1.
+const EXACT_LIMIT = 200;
+
+// Numerical Recipes erfc, fractional error below 1.2e-7 everywhere.
+function erfc(x: number): number {
+  const z = Math.abs(x);
+  const t = 1 / (1 + 0.5 * z);
+  const r =
+    t *
+    Math.exp(
+      -z * z -
+        1.26551223 +
+        t *
+          (1.00002368 +
+            t *
+              (0.37409196 +
+                t *
+                  (0.09678418 +
+                    t *
+                      (-0.18628806 +
+                        t *
+                          (0.27886807 +
+                            t *
+                              (-1.13520398 +
+                                t * (1.48851587 + t * (-0.82215223 + t * 0.17087277))))))))
+    );
+  return x >= 0 ? r : 2 - r;
+}
+function normalCdf(z: number): number {
+  return 0.5 * erfc(-z / Math.SQRT2);
+}
+
+function poissonPmf(lambda: number): number[] {
+  const kmax = Math.ceil(lambda + 12 * Math.sqrt(lambda) + 20);
+  const p: number[] = [Math.exp(-lambda)];
+  for (let k = 1; k <= kmax; k++) p.push((p[k - 1] * lambda) / k);
+  return p;
+}
+
+function clamp01(x: number): number {
+  return x < 0 ? 0 : x > 1 ? 1 : x;
+}
+
+export function outcomeChances(
+  eH: number,
+  eA: number
+): { home: number; draw: number; away: number } {
+  if (eH > EXACT_LIMIT || eA > EXACT_LIMIT) {
+    const mu = eH - eA;
+    const sd = Math.sqrt(eH + eA);
+    const homeP = 1 - normalCdf((0.5 - mu) / sd);
+    const awayP = normalCdf((-0.5 - mu) / sd);
+    return {
+      home: clamp01(homeP),
+      draw: clamp01(1 - homeP - awayP),
+      away: clamp01(awayP),
+    };
+  }
+  const ph = poissonPmf(eH);
+  const pa = poissonPmf(eA);
+  let cumA = 0; // P(away goals <= h - 1) at the start of each step
+  let home = 0;
+  let draw = 0;
+  let away = 0;
+  for (let h = 0; h < ph.length; h++) {
+    const pAh = h < pa.length ? pa[h] : 0;
+    home += ph[h] * cumA;
+    draw += ph[h] * pAh;
+    cumA += pAh;
+    away += ph[h] * (1 - cumA);
+  }
+  return { home: clamp01(home), draw: clamp01(draw), away: clamp01(away) };
+}
+
 // ── Rule 2: Over 2.5 ──────────────────────────────────────────────────────
 // T1, main formula. Requires a1 > 0 and b1 > 0 (callers only use it when
 // both are at least 1).
@@ -237,6 +331,7 @@ export type OverEval = {
 
 export type Evaluation = {
   side: PredictSide | null; // Home / Draw / Away pick, if any
+  sideChance: number | null; // model chance of that pick, 0..1
   sideSkipped: boolean; // true when R could not be calculated
   over: OverEval | null; // Over 2.5 call, if any
   overSkipped: boolean; // true when a team's scored average is below 1
@@ -260,6 +355,14 @@ export function evaluate(
   const side = r ? sideOf(r) : null;
   const sideSkipped = r === null;
 
+  let sideChance: number | null = null;
+  if (side) {
+    const eH = qToNumber(qDiv(qAdd(A1, B2), TWO));
+    const eA = qToNumber(qDiv(qAdd(B1, A2), TWO));
+    const c = outcomeChances(eH, eA);
+    sideChance = side === 'Home' ? c.home : side === 'Draw' ? c.draw : c.away;
+  }
+
   const overSkipped = qCmp(A1, ONEQ) < 0 || qCmp(B1, ONEQ) < 0;
   let over: OverEval | null = null;
   if (!overSkipped) {
@@ -279,7 +382,7 @@ export function evaluate(
     }
   }
 
-  return { ok: true, ev: { side, sideSkipped, over, overSkipped } };
+  return { ok: true, ev: { side, sideChance, sideSkipped, over, overSkipped } };
 }
 
 // ── Parsing ───────────────────────────────────────────────────────────────
@@ -344,7 +447,14 @@ export function runPrediction(text: string): PredictResult {
     result.checked++;
     if (e.ev.sideSkipped) result.noSide.push(num);
     if (e.ev.overSkipped) result.noOver.push(num);
-    if (e.ev.side) result.outcomes.push({ num, name, side: e.ev.side });
+    if (e.ev.side && e.ev.sideChance !== null) {
+      result.outcomes.push({
+        num,
+        name,
+        side: e.ev.side,
+        confidence: e.ev.sideChance,
+      });
+    }
     if (e.ev.over) {
       result.overs.push({
         num,
@@ -358,8 +468,14 @@ export function runPrediction(text: string): PredictResult {
     }
   }
 
-  // Highest confidence first. Ties (e.g. several at the 100% cap): higher
-  // expected total first, then the original match number.
+  // Outcome calls: highest confidence first. Ties: lower match number first.
+  result.outcomes.sort(function (a, b) {
+    if (b.confidence !== a.confidence) return b.confidence - a.confidence;
+    return a.num - b.num;
+  });
+
+  // Over 2.5 calls: highest confidence first. Ties (e.g. several at the
+  // 100% cap): higher expected total first, then the original match number.
   result.overs.sort(function (a, b) {
     if (b.confidence !== a.confidence) return b.confidence - a.confidence;
     if (b.total !== a.total) return b.total - a.total;
@@ -374,8 +490,8 @@ function numList(nums: number[]): string {
 }
 
 // Returns one or more message texts (each safely under Telegram's limit).
-// Order: Outcome section first, then Over 2.5 (highest confidence first),
-// then a short footer.
+// Order: Outcome section first (highest confidence first), then Over 2.5
+// (highest confidence first), then a short footer.
 export function formatPrediction(r: PredictResult): string[] {
   const total = r.checked + r.skipped.length;
   if (total === 0) {
@@ -406,6 +522,11 @@ export function formatPrediction(r: PredictResult): string[] {
         count('Away') + ' Away, ' + r.overs.length + ' Over 2.5.'
     );
   }
+  if (r.outcomes.length > 0) {
+    footer.push(
+      'Outcome % = model chance of that result (independent Poisson goals), an estimate, not a measured hit rate. Draws always score low.'
+    );
+  }
   if (r.overs.some((m) => m.boosted)) {
     footer.push(
       'Boosted = the second formula also reached 3+ goals (x1.25, capped at 100%). Boosted numbers are ranking scores, not probabilities.'
@@ -431,8 +552,9 @@ export function formatPrediction(r: PredictResult): string[] {
   // never left alone at the end of a message.
   const blocks: string[] = [];
   r.outcomes.forEach(function (m, i) {
-    const entry = m.num + ') ' + m.name + '\n' + m.side;
-    blocks.push(i === 0 ? 'OUTCOME\n\n' + entry : entry);
+    const pct = Math.round(m.confidence * 100);
+    const entry = m.num + ') ' + m.name + '\n' + m.side + ' · ' + pct + '%';
+    blocks.push(i === 0 ? 'OUTCOME (highest confidence first)\n\n' + entry : entry);
   });
   r.overs.forEach(function (m, i) {
     const pct = Math.round(m.confidence * 100);
