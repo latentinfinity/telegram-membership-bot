@@ -24,6 +24,10 @@ import {
   masanielloHistoryDetailKeyboard,
   masanielloUndoConfirm,
   predictAgainKeyboard,
+  ticketsMenu,
+  ticketsCreateConfirm,
+  ticketsClearConfirm,
+  ticketsBackKeyboard,
   sendForceReply,
 } from '@/lib/menus';
 import {
@@ -88,6 +92,22 @@ import {
 } from '@/lib/masanielloStore';
 import type { MasCycle } from '@/lib/masanielloStore';
 import { runPrediction, formatPrediction, PREDICT_USAGE } from '@/lib/predict';
+import {
+  parseNewMatches,
+  planMatches,
+  buildTickets,
+  formatTickets,
+  ticketSizes,
+  MAX_STORED_MATCHES,
+} from '@/lib/tickets';
+import {
+  listStored,
+  countStored,
+  addMatches,
+  clearStored,
+  takeAll,
+  restoreRows,
+} from '@/lib/ticketStore';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
@@ -595,6 +615,291 @@ async function handlePredict(chatId: number, rawText: string) {
   }
 }
 
+// ── Tickets ───────────────────────────────────────────────────────────────
+function sleep(ms: number): Promise<void> {
+  return new Promise<void>((resolve) => setTimeout(resolve, ms));
+}
+
+// Sends one plain text message and reports whether Telegram accepted it.
+// Used for the tickets so a failed send is noticed (the matches are then put
+// back). Retries a few times, and waits when Telegram asks us to slow down.
+async function sendTicketText(chatId: number, text: string): Promise<boolean> {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const res = await fetch(
+        `https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendMessage`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ chat_id: chatId, text }),
+        }
+      );
+      if (res.ok) return true;
+      if (res.status === 429) {
+        let waitMs = 2000;
+        try {
+          const body = await res.json();
+          const retryAfter = body && body.parameters && body.parameters.retry_after;
+          if (typeof retryAfter === 'number') {
+            waitMs = Math.min(retryAfter, 10) * 1000 + 200;
+          }
+        } catch (e) {
+          console.error('could not read 429 body', e);
+        }
+        await sleep(waitMs);
+        continue;
+      }
+      if (res.status >= 500) {
+        await sleep(1000);
+        continue;
+      }
+      return false;
+    } catch (e) {
+      console.error('ticket message send failed', e);
+      await sleep(500);
+    }
+  }
+  return false;
+}
+
+async function showTicketsMenu(chatId: number) {
+  const c = await countStored();
+  const n = c.ok ? c.count : 0;
+  await sendMessage(
+    chatId,
+    c.ok
+      ? 'Tickets: ' + n + ' ' + (n === 1 ? 'match' : 'matches') +
+          ' stored (up to ' + MAX_STORED_MATCHES + ').'
+      : 'Tickets: could not read the storage (' + c.error + ').',
+    ticketsMenu(n)
+  );
+}
+
+// The admin replied to the "Add Matches" prompt.
+async function handleTicketsAdd(chatId: number, adminId: number, rawText: string) {
+  const parsed = parseNewMatches(rawText);
+  const lines: string[] = [];
+
+  if (parsed.matches.length > 0) {
+    const r = await addMatches(adminId, parsed.matches);
+    if (r.ok) {
+      lines.push(
+        'Stored ' + r.added + ' new' +
+          (r.replaced > 0 ? ', replaced ' + r.replaced + ' with the same name' : '') +
+          '. Total stored: ' + r.total + '.'
+      );
+    } else {
+      lines.push('❌ ' + r.error);
+    }
+  } else if (parsed.rejected.length === 0) {
+    await sendMessage(chatId, 'No matches found.\n\n' + PREDICT_USAGE);
+    await showTicketsMenu(chatId);
+    return;
+  } else {
+    lines.push('Nothing was stored.');
+  }
+
+  if (parsed.duplicatesInPaste > 0) {
+    lines.push(
+      parsed.duplicatesInPaste + ' repeated name(s) in this message: the later one was kept.'
+    );
+  }
+  if (parsed.rejected.length > 0) {
+    const shown = parsed.rejected
+      .slice(0, 15)
+      .map((x) => x.label + ' (' + x.reason + ')')
+      .join(', ');
+    lines.push(
+      'Not stored: ' + shown +
+        (parsed.rejected.length > 15 ? ' and ' + (parsed.rejected.length - 15) + ' more' : '') + '.'
+    );
+  }
+
+  await sendMessage(chatId, lines.join('\n'));
+  await showTicketsMenu(chatId);
+}
+
+// Lists the stored matches and which of them have an Over call.
+async function handleTicketsView(chatId: number) {
+  const l = await listStored();
+  if (!l.ok) {
+    await sendMessage(chatId, '❌ Could not read the storage: ' + l.error);
+    await showTicketsMenu(chatId);
+    return;
+  }
+  if (l.rows.length === 0) {
+    await sendMessage(chatId, 'The storage is empty. Tap Add Matches.');
+    await showTicketsMenu(chatId);
+    return;
+  }
+
+  const plan = planMatches(l.rows.map((r) => ({ name: r.name, dataLine: r.dataLine })));
+  const callById: Record<number, number> = {};
+  plan.matches.forEach((m) => {
+    callById[m.id] = m.call;
+  });
+
+  const entries = l.rows.map(
+    (r, i) =>
+      i + 1 + ') ' + r.name + ' · ' +
+      (callById[i + 1] ? 'Over ' + callById[i + 1] : 'no Over call')
+  );
+
+  const chunks: string[] = [];
+  let current = 'STORED MATCHES (' + l.rows.length + ')\n';
+  for (let i = 0; i < entries.length; i++) {
+    if (current.length + entries[i].length + 1 > 3500) {
+      chunks.push(current);
+      current = '';
+    }
+    current += (current ? '\n' : '') + entries[i];
+  }
+  if (current) chunks.push(current);
+
+  for (let i = 0; i < chunks.length; i++) {
+    if (i === chunks.length - 1) {
+      await sendMessage(chatId, chunks[i], ticketsBackKeyboard());
+    } else {
+      await sendMessage(chatId, chunks[i]);
+    }
+  }
+}
+
+// Step 1 of creating tickets: show what will happen and ask to confirm.
+async function handleTicketsCreateAsk(chatId: number) {
+  const l = await listStored();
+  if (!l.ok) {
+    await sendMessage(chatId, '❌ Could not read the storage: ' + l.error);
+    await showTicketsMenu(chatId);
+    return;
+  }
+  if (l.rows.length === 0) {
+    await sendMessage(chatId, 'The storage is empty. Add matches first.');
+    await showTicketsMenu(chatId);
+    return;
+  }
+
+  const plan = planMatches(l.rows.map((r) => ({ name: r.name, dataLine: r.dataLine })));
+  const m = plan.matches.length;
+  if (m === 0) {
+    await sendMessage(
+      chatId,
+      'None of the ' + l.rows.length +
+        ' stored matches has an Over 3.5 or Over 2.5 call, so no tickets can be made. Nothing changed.'
+    );
+    await showTicketsMenu(chatId);
+    return;
+  }
+
+  const n35 = plan.matches.filter((x) => x.call === 3.5).length;
+  const n25 = m - n35;
+  const sizes = ticketSizes(m);
+  await sendMessage(
+    chatId,
+    'Create tickets now?\n\n' +
+      'Stored matches: ' + l.rows.length + '\n' +
+      'With an Over call: ' + m + ' (' + n35 + ' Over 3.5, ' + n25 + ' Over 2.5)\n' +
+      'Options: ' + m * 2 + '\n' +
+      'Tickets: ' + sizes.length + ' (sizes: ' + sizes.join(', ') + ')\n' +
+      'No Over call, left out: ' + (l.rows.length - m) + '\n\n' +
+      'The storage is emptied when the tickets are created (all ' + l.rows.length +
+      ' matches). If sending fails, your matches are put back.',
+    ticketsCreateConfirm()
+  );
+}
+
+// Step 2: take every stored match (atomically), build and send the tickets.
+// A second tap finds the storage empty and does nothing.
+async function handleTicketsCreateDo(chatId: number) {
+  const taken = await takeAll();
+  if (!taken.ok) {
+    await sendMessage(chatId, '❌ Could not read the storage: ' + taken.error);
+    await showTicketsMenu(chatId);
+    return;
+  }
+  const rows = taken.rows;
+  if (rows.length === 0) {
+    await sendMessage(
+      chatId,
+      'The storage is empty, nothing to do. (If you tapped twice, the tickets were already sent.)'
+    );
+    await showTicketsMenu(chatId);
+    return;
+  }
+
+  const putBack = async (why: string) => {
+    const rs = await restoreRows(rows);
+    await sendMessage(
+      chatId,
+      why + '\n' +
+        (rs.ok
+          ? 'Your ' + rows.length + ' matches are back in the storage.'
+          : '⚠️ Could not put the matches back (' + rs.error + '). Please add them again.')
+    );
+  };
+
+  try {
+    const plan = planMatches(rows.map((r) => ({ name: r.name, dataLine: r.dataLine })));
+    if (plan.matches.length === 0) {
+      await putBack('None of the stored matches has an Over call, so no tickets were made.');
+    } else {
+      const tickets = buildTickets(plan.matches.map((x) => ({ id: x.id, call: x.call })));
+      const messages = formatTickets(tickets, plan.matches, plan.stored);
+
+      let failedAt = 0;
+      for (let i = 0; i < messages.length; i++) {
+        const sent = await sendTicketText(chatId, messages[i]);
+        if (!sent) {
+          failedAt = i + 1;
+          break;
+        }
+        if (i < messages.length - 1) await sleep(300);
+      }
+
+      if (failedAt > 0) {
+        await putBack(
+          '❌ Sending stopped at message ' + failedAt + ' of ' + messages.length +
+            '. Ignore the tickets sent above, they are not a complete set.'
+        );
+      } else {
+        await sendMessage(
+          chatId,
+          'Done. The storage is now empty. Add the next batch whenever you are ready.'
+        );
+      }
+    }
+  } catch (e) {
+    console.error('tickets create failed', e);
+    await putBack('❌ Something went wrong while creating the tickets.');
+  }
+  await showTicketsMenu(chatId);
+}
+
+async function handleTicketsClearAsk(chatId: number) {
+  const c = await countStored();
+  if (!c.ok) {
+    await sendMessage(chatId, '❌ Could not read the storage: ' + c.error);
+    await showTicketsMenu(chatId);
+    return;
+  }
+  if (c.count === 0) {
+    await sendMessage(chatId, 'The storage is already empty.');
+    await showTicketsMenu(chatId);
+    return;
+  }
+  await sendMessage(
+    chatId,
+    'Clear all ' + c.count + ' stored matches? This cannot be undone.',
+    ticketsClearConfirm()
+  );
+}
+
+async function handleTicketsClearDo(chatId: number) {
+  const r = await clearStored();
+  await sendMessage(chatId, r.ok ? 'Storage cleared.' : '❌ Could not clear: ' + r.error);
+  await showTicketsMenu(chatId);
+}
+
 async function handleScheduleStart(
   chatId: number,
   adminId: number,
@@ -823,6 +1128,22 @@ async function handleAdminButton(
     await showMasanielloMenu(chatId);
   } else if (data === 'a_predict') {
     await sendForceReply(chatId, PROMPTS.predict);
+  } else if (data === 'a_tk_menu') {
+    await clearDraft(adminId);
+    await showTicketsMenu(chatId);
+  } else if (data === 'a_tk_add') {
+    await clearDraft(adminId);
+    await sendForceReply(chatId, PROMPTS.tkAdd);
+  } else if (data === 'a_tk_view') {
+    await handleTicketsView(chatId);
+  } else if (data === 'a_tk_create') {
+    await handleTicketsCreateAsk(chatId);
+  } else if (data === 'a_tk_create_yes') {
+    await handleTicketsCreateDo(chatId);
+  } else if (data === 'a_tk_clear') {
+    await handleTicketsClearAsk(chatId);
+  } else if (data === 'a_tk_clear_yes') {
+    await handleTicketsClearDo(chatId);
   } else if (data === 'sched_skip_photo') {
     await setPhoto(adminId, null, 'awaiting_caption');
     await sendMessage(chatId, 'Send the text for the post.');
@@ -1142,6 +1463,8 @@ export async function POST(req: Request) {
           await handleMasanielloTicket(chatId, text);
         } else if (promptCommand === 'predict') {
           await handlePredict(chatId, text);
+        } else if (promptCommand === 'tk_add') {
+          await handleTicketsAdd(chatId, from.id, text);
         } else {
           await handleAdminCommand(chatId, from.id, promptCommand, parts);
           await showAdminMenu(chatId);

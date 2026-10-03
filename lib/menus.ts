@@ -23,6 +23,8 @@ export const PROMPTS = {
     'Send the next ticket as: odds | prediction\nExample: 1.85 | Arsenal & Chelsea over 1.5\n(odds = final odds of this ticket, single or combined; the prediction text is optional)',
   predict:
     'Paste your matches now.\nFormat (time and form are optional):\n1) 20:45 Home - Away\nldlwl,wdwwl,1.2,1.42,2.5,1.6\nThe four numbers are: home scored, home conceded, away scored, away conceded.',
+  tkAdd:
+    'Paste the matches to store for tickets.\nSame format as Predict (time and form are optional):\n1) 20:45 Home - Away\nldlwl,wdwwl,1.2,1.42,2.5,1.6\nYou can add more batches later. A match with the same name replaces the old one.',
 };
 
 export const PROMPT_COMMANDS: Record<string, string> = {
@@ -40,6 +42,7 @@ export const PROMPT_COMMANDS: Record<string, string> = {
   [PROMPTS.masNew]: 'mas_new',
   [PROMPTS.masTicket]: 'mas_ticket',
   [PROMPTS.predict]: 'predict',
+  [PROMPTS.tkAdd]: 'tk_add',
 };
 
 export function userMenu(isAdminUser: boolean): InlineKeyboard {
@@ -82,6 +85,7 @@ export function adminMenu(): InlineKeyboard {
     [{ text: '🤖 Engagement', callback_data: 'a_engagement_menu' }],
     [{ text: '🎯 Masaniello', callback_data: 'a_mas_menu' }],
     [{ text: '🔮 Predict', callback_data: 'a_predict' }],
+    [{ text: '🎫 Tickets', callback_data: 'a_tk_menu' }],
     [{ text: '⚙️ Run Daily Job', callback_data: 'a_runcron' }],
     [{ text: '⬅️ Back to Menu', callback_data: 'menu' }],
   ];
@@ -254,6 +258,43 @@ export function predictAgainKeyboard(): InlineKeyboard {
     [{ text: '🔮 Predict again', callback_data: 'a_predict' }],
     [{ text: '⬅️ Admin Panel', callback_data: 'admin_menu' }],
   ];
+}
+
+// Tickets menu. storedCount = matches currently in the temporary storage.
+export function ticketsMenu(storedCount: number): InlineKeyboard {
+  const rows: InlineKeyboard = [];
+  rows.push([{ text: '➕ Add Matches', callback_data: 'a_tk_add' }]);
+  if (storedCount > 0) {
+    rows.push([
+      {
+        text: '🎫 Create Tickets (' + storedCount + ' stored)',
+        callback_data: 'a_tk_create',
+      },
+    ]);
+    rows.push([{ text: '📋 View Stored Matches', callback_data: 'a_tk_view' }]);
+    rows.push([{ text: '🗑 Clear Matches', callback_data: 'a_tk_clear' }]);
+  }
+  rows.push([{ text: '⬅️ Admin Panel', callback_data: 'admin_menu' }]);
+  return rows;
+}
+
+// Confirmation before creating tickets (creating empties the storage).
+export function ticketsCreateConfirm(): InlineKeyboard {
+  return [
+    [{ text: '✅ Yes, create tickets', callback_data: 'a_tk_create_yes' }],
+    [{ text: '↩️ No, go back', callback_data: 'a_tk_menu' }],
+  ];
+}
+
+export function ticketsClearConfirm(): InlineKeyboard {
+  return [
+    [{ text: '✅ Yes, clear all', callback_data: 'a_tk_clear_yes' }],
+    [{ text: '↩️ No, keep them', callback_data: 'a_tk_menu' }],
+  ];
+}
+
+export function ticketsBackKeyboard(): InlineKeyboard {
+  return [[{ text: '⬅️ Tickets Menu', callback_data: 'a_tk_menu' }]];
 }
 
 export async function sendForceReply(chatId: number, text: string) {
