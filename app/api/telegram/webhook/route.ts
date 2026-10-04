@@ -98,6 +98,9 @@ import {
   buildTickets,
   formatTickets,
   ticketSizes,
+  eliminateRandom,
+  removalCount,
+  ELIMINATE_PERCENT,
   MAX_STORED_MATCHES,
 } from '@/lib/tickets';
 import {
@@ -699,6 +702,13 @@ async function handleTicketsAdd(chatId: number, adminId: number, rawText: string
     lines.push('Nothing was stored.');
   }
 
+  if (parsed.matches.length > 0 && parsed.leaguesFound > 0) {
+    const noLeague = parsed.matches.filter((x) => !x.league).length;
+    lines.push(
+      'Leagues found: ' + parsed.leaguesFound +
+        (noLeague > 0 ? ' (' + noLeague + ' match' + (noLeague === 1 ? '' : 'es') + ' without a league)' : '') + '.'
+    );
+  }
   if (parsed.duplicatesInPaste > 0) {
     lines.push(
       parsed.duplicatesInPaste + ' repeated name(s) in this message: the later one was kept.'
@@ -733,7 +743,9 @@ async function handleTicketsView(chatId: number) {
     return;
   }
 
-  const plan = planMatches(l.rows.map((r) => ({ name: r.name, dataLine: r.dataLine })));
+  const plan = planMatches(
+    l.rows.map((r) => ({ name: r.name, dataLine: r.dataLine, league: r.league }))
+  );
   const callById: Record<number, number> = {};
   plan.matches.forEach((m) => {
     callById[m.id] = m.call;
@@ -742,7 +754,8 @@ async function handleTicketsView(chatId: number) {
   const entries = l.rows.map(
     (r, i) =>
       i + 1 + ') ' + r.name + ' · ' +
-      (callById[i + 1] ? 'Over ' + callById[i + 1] : 'no Over call')
+      (callById[i + 1] ? 'Over ' + callById[i + 1] : 'no Over call') +
+      (r.league ? '\n' + r.league : '')
   );
 
   const chunks: string[] = [];
@@ -779,7 +792,9 @@ async function handleTicketsCreateAsk(chatId: number) {
     return;
   }
 
-  const plan = planMatches(l.rows.map((r) => ({ name: r.name, dataLine: r.dataLine })));
+  const plan = planMatches(
+    l.rows.map((r) => ({ name: r.name, dataLine: r.dataLine, league: r.league }))
+  );
   const m = plan.matches.length;
   if (m === 0) {
     await sendMessage(
@@ -793,13 +808,17 @@ async function handleTicketsCreateAsk(chatId: number) {
 
   const n35 = plan.matches.filter((x) => x.call === 3.5).length;
   const n25 = m - n35;
-  const sizes = ticketSizes(m);
+  const cutCount = removalCount(m);
+  const kept = m - cutCount;
+  const sizes = ticketSizes(kept);
   await sendMessage(
     chatId,
     'Create tickets now?\n\n' +
       'Stored matches: ' + l.rows.length + '\n' +
       'With an Over call: ' + m + ' (' + n35 + ' Over 3.5, ' + n25 + ' Over 2.5)\n' +
-      'Options: ' + m * 2 + '\n' +
+      'Removed at random (' + ELIMINATE_PERCENT + '%): ' + cutCount +
+      ' (' + kept + ' stay, chosen when you confirm)\n' +
+      'Options: ' + kept * 2 + '\n' +
       'Tickets: ' + sizes.length + ' (sizes: ' + sizes.join(', ') + ')\n' +
       'No Over call, left out: ' + (l.rows.length - m) + '\n\n' +
       'The storage is emptied when the tickets are created (all ' + l.rows.length +
@@ -839,12 +858,15 @@ async function handleTicketsCreateDo(chatId: number) {
   };
 
   try {
-    const plan = planMatches(rows.map((r) => ({ name: r.name, dataLine: r.dataLine })));
+    const plan = planMatches(
+      rows.map((r) => ({ name: r.name, dataLine: r.dataLine, league: r.league }))
+    );
     if (plan.matches.length === 0) {
       await putBack('None of the stored matches has an Over call, so no tickets were made.');
     } else {
-      const tickets = buildTickets(plan.matches.map((x) => ({ id: x.id, call: x.call })));
-      const messages = formatTickets(tickets, plan.matches, plan.stored);
+      const cut = eliminateRandom(plan.matches);
+      const tickets = buildTickets(cut.kept.map((x) => ({ id: x.id, call: x.call })));
+      const messages = formatTickets(tickets, cut.kept, plan.stored, cut.removed);
 
       let failedAt = 0;
       for (let i = 0; i < messages.length; i++) {

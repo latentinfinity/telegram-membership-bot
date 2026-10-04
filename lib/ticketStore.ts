@@ -1,6 +1,6 @@
 // ═══════════════════════════════════════════════════════════════
 // TICKET STORE — the temporary storage of matches for ticket creation.
-// Table: ticket_matches (name, name_key unique, data_line, created_by,
+// Table: ticket_matches (name, name_key unique, data_line, league, created_by,
 // created_at). Service-role access only, like every other table.
 //
 // Functions never throw: they return { ok: false, error } instead.
@@ -16,7 +16,7 @@
 import { createAdminClient } from './supabase/admin';
 import { MAX_STORED_MATCHES, NewMatch } from './tickets';
 
-export type StoredRow = { id: string; name: string; dataLine: string };
+export type StoredRow = { id: string; name: string; dataLine: string; league: string | null };
 
 type Fail = { ok: false; error: string };
 
@@ -33,14 +33,17 @@ export async function listStored(): Promise<{ ok: true; rows: StoredRow[] } | Fa
     const db = createAdminClient();
     const { data, error } = await db
       .from('ticket_matches')
-      .select('id, name, data_line')
+      .select('id, name, data_line, league')
       .order('created_at', { ascending: true })
       .order('id', { ascending: true });
     if (error) return { ok: false, error: error.message };
-    const rows = ((data || []) as { id: string; name: string; data_line: string }[]).map((r) => ({
+    const rows = (
+      (data || []) as { id: string; name: string; data_line: string; league: string | null }[]
+    ).map((r) => ({
       id: r.id,
       name: r.name,
       dataLine: r.data_line,
+      league: r.league || null,
     }));
     return { ok: true, rows };
   } catch (e) {
@@ -105,6 +108,7 @@ export async function addMatches(
       name: byKey[k].name,
       name_key: k,
       data_line: byKey[k].dataLine,
+      league: byKey[k].league,
       created_by: adminId,
       created_at: now,
     }));
@@ -148,6 +152,7 @@ export type TakenRow = {
   name: string;
   nameKey: string;
   dataLine: string;
+  league: string | null;
   createdBy: number;
   createdAt: string;
 };
@@ -161,13 +166,14 @@ export async function takeAll(): Promise<{ ok: true; rows: TakenRow[] } | Fail> 
       .from('ticket_matches')
       .delete()
       .not('id', 'is', null)
-      .select('name, name_key, data_line, created_by, created_at');
+      .select('name, name_key, data_line, league, created_by, created_at');
     if (error) return { ok: false, error: error.message };
     const rows = (
       (data || []) as {
         name: string;
         name_key: string;
         data_line: string;
+        league: string | null;
         created_by: number;
         created_at: string;
       }[]
@@ -175,6 +181,7 @@ export async function takeAll(): Promise<{ ok: true; rows: TakenRow[] } | Fail> 
       name: r.name,
       nameKey: r.name_key,
       dataLine: r.data_line,
+      league: r.league || null,
       createdBy: Number(r.created_by),
       createdAt: r.created_at,
     }));
@@ -198,6 +205,7 @@ export async function restoreRows(rows: TakenRow[]): Promise<{ ok: true } | Fail
       name: r.name,
       name_key: r.nameKey,
       data_line: r.dataLine,
+      league: r.league,
       created_by: r.createdBy,
       created_at: r.createdAt,
     }));

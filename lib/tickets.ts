@@ -20,6 +20,10 @@ import { runPrediction } from './predict';
 
 export const MAX_STORED_MATCHES = 100;
 export const MAX_NAME_LENGTH = 80;
+export const MAX_LEAGUE_LENGTH = 80;
+// Share of the matches (with an Over call) removed at random before the
+// tickets are built. A one-line change if it is ever wanted differently.
+export const ELIMINATE_PERCENT = 20;
 
 export const MAX_PER_TICKET = 10;
 
@@ -180,13 +184,53 @@ export function chanceOverLine(totalMean: number, line: TicketLine): number {
   return chanceAtLeast(totalMean, need);
 }
 
+// ── Random removal ────────────────────────────────────────────────────────
+// How many of m matches to remove: percent of m rounded to the nearest whole
+// match (exact integer arithmetic), never all of them.
+export function removalCount(m: number, percent: number = ELIMINATE_PERCENT): number {
+  if (m <= 1) return 0;
+  const n = Math.floor((2 * m * percent + 100) / 200);
+  if (n < 0) return 0;
+  return n > m - 1 ? m - 1 : n;
+}
+
+// Removes removalCount(items.length) items at random. Both lists keep the
+// original order. Random removal does not pick out losing matches: every
+// match has the same chance of being removed.
+export function eliminateRandom<T>(
+  items: T[],
+  percent: number = ELIMINATE_PERCENT,
+  rand: () => number = Math.random
+): { kept: T[]; removed: T[] } {
+  const n = removalCount(items.length, percent);
+  const order = shuffle(
+    items.map((_, i) => i),
+    rand
+  );
+  const gone: Record<number, boolean> = {};
+  for (let i = 0; i < n; i++) gone[order[i]] = true;
+  const kept: T[] = [];
+  const removed: T[] = [];
+  items.forEach((it, i) => {
+    if (gone[i]) removed.push(it);
+    else kept.push(it);
+  });
+  return { kept, removed };
+}
+
 // ── Parsing matches to store ──────────────────────────────────────────────
-export type NewMatch = { name: string; nameKey: string; dataLine: string };
+export type NewMatch = {
+  name: string;
+  nameKey: string;
+  dataLine: string;
+  league: string | null; // the league line above the match, if there was one
+};
 export type RejectedMatch = { label: string; reason: string };
 export type ParseOutcome = {
   matches: NewMatch[];
   rejected: RejectedMatch[];
   duplicatesInPaste: number;
+  leaguesFound: number; // different leagues among the accepted matches
 };
 
 // "20:45 Eastleigh - Southend" -> "Eastleigh - Southend"
@@ -203,22 +247,54 @@ export function matchKey(name: string): string {
   return name.toLowerCase().replace(/\s+/g, ' ').trim();
 }
 
-// Reads pasted matches (same format as Predict). A match is accepted only if
-// Predict itself can read it, so a stored match always works later.
+// "NORWAY:   Division 2 - Group 1 " -> "NORWAY: Division 2 - Group 1"
+export function cleanLeague(raw: string): string {
+  return raw.replace(/\s+/g, ' ').trim().slice(0, MAX_LEAGUE_LENGTH);
+}
+
+// 4 or 6 comma separated values whose last four are plain numbers.
+function looksLikeDataLine(line: string): boolean {
+  const parts = line.split(',');
+  if (parts.length !== 4 && parts.length !== 6) return false;
+  const nums = parts.slice(parts.length - 4);
+  for (let i = 0; i < nums.length; i++) {
+    if (!/^\d{1,9}(\.\d{1,9})?$/.test(nums[i].trim())) return false;
+  }
+  return true;
+}
+
+// Reads pasted matches (same format as Predict). A line that is not a match
+// line and not a data line is a league line: it applies to every match below
+// it until the next league line. A match is accepted only if Predict itself
+// can read it, so a stored match always works later.
 export function parseNewMatches(text: string): ParseOutcome {
   const lines = text.split('\n').map((l) => l.trim());
-  const out: ParseOutcome = { matches: [], rejected: [], duplicatesInPaste: 0 };
+  const out: ParseOutcome = {
+    matches: [],
+    rejected: [],
+    duplicatesInPaste: 0,
+    leaguesFound: 0,
+  };
   const indexByKey: Record<string, number> = {};
+  let league: string | null = null;
 
   for (let i = 0; i < lines.length; i++) {
     const head = lines[i].match(/^(\d+)\)\s*(.*)$/);
-    if (!head) continue;
+    if (!head) {
+      if (lines[i].length > 0 && !looksLikeDataLine(lines[i])) {
+        const lg = cleanLeague(lines[i]);
+        if (lg) league = lg;
+      }
+      continue;
+    }
     const label = '#' + head[1];
     const name = cleanMatchName(head[2]);
 
     let j = i + 1;
     while (j < lines.length && lines[j].length === 0) j++;
-    if (j >= lines.length || /^\d+\)/.test(lines[j])) {
+    // A line without any comma is not a data line (it may be a league line,
+    // which the loop then reads on its own).
+    if (j >= lines.length || /^\d+\)/.test(lines[j]) || lines[j].indexOf(',') === -1) {
       out.rejected.push({ label, reason: 'no data line under it' });
       continue;
     }
@@ -241,7 +317,7 @@ export function parseNewMatches(text: string): ParseOutcome {
     }
 
     const nameKey = matchKey(name);
-    const item: NewMatch = { name, nameKey, dataLine };
+    const item: NewMatch = { name, nameKey, dataLine, league };
     if (indexByKey[nameKey] !== undefined) {
       out.matches[indexByKey[nameKey]] = item; // later one replaces the earlier one
       out.duplicatesInPaste++;
@@ -250,15 +326,22 @@ export function parseNewMatches(text: string): ParseOutcome {
       out.matches.push(item);
     }
   }
+
+  const seen: Record<string, boolean> = {};
+  out.matches.forEach((m) => {
+    if (m.league) seen[m.league] = true;
+  });
+  out.leaguesFound = Object.keys(seen).length;
   return out;
 }
 
 // ── Planning: which stored matches have an Over call ──────────────────────
-export type StoredMatch = { name: string; dataLine: string };
+export type StoredMatch = { name: string; dataLine: string; league?: string | null };
 
 export type PlannedMatch = {
   id: number; // 1-based position in the stored list
   name: string;
+  league: string | null;
   call: 2.5 | 3.5;
   total: number; // eH + eA
 };
@@ -277,7 +360,7 @@ export function planMatches(stored: StoredMatch[]): Plan {
   const planned: PlannedMatch[] = [];
   const add = (num: number, call: 2.5 | 3.5, total: number) => {
     const s = stored[num - 1];
-    if (s) planned.push({ id: num, name: s.name, call, total });
+    if (s) planned.push({ id: num, name: s.name, league: s.league || null, call, total });
   };
   res.over35.forEach((c) => add(c.num, 3.5, c.total));
   res.over25.forEach((c) => add(c.num, 2.5, c.total));
@@ -288,10 +371,13 @@ export function planMatches(stored: StoredMatch[]): Plan {
 
 // ── Output ────────────────────────────────────────────────────────────────
 // One message per ticket, then a short summary message.
+// planned = the matches that are in the tickets; removed = the matches taken
+// out at random before building (listed in the summary).
 export function formatTickets(
   tickets: TicketOption[][],
   planned: PlannedMatch[],
-  storedCount: number
+  storedCount: number,
+  removed: PlannedMatch[] = []
 ): string[] {
   const byId: Record<number, PlannedMatch> = {};
   planned.forEach((m) => {
@@ -302,13 +388,20 @@ export function formatTickets(
   tickets.forEach((ticket, ti) => {
     const rows = ticket.map((o) => {
       const m = byId[o.matchId];
-      return { name: m.name, id: o.matchId, line: o.line, chance: chanceOverLine(m.total, o.line) };
+      return {
+        name: m.name,
+        league: m.league,
+        id: o.matchId,
+        line: o.line,
+        chance: chanceOverLine(m.total, o.line),
+      };
     });
     rows.sort((a, b) => (b.chance !== a.chance ? b.chance - a.chance : a.id - b.id));
     const body = rows
       .map(
         (r, i) =>
-          i + 1 + ') ' + r.name + '\nOver ' + r.line + ' · ' + Math.round(r.chance * 100) + '%'
+          i + 1 + ') ' + r.name + (r.league ? '\n' + r.league : '') +
+          '\nOver ' + r.line + ' · ' + Math.round(r.chance * 100) + '%'
       )
       .join('\n\n');
     messages.push(
@@ -321,7 +414,13 @@ export function formatTickets(
   lines.push(
     tickets.length + ' tickets from ' + planned.length + ' matches (' + planned.length * 2 + ' options).'
   );
-  const left = storedCount - planned.length;
+  if (removed.length > 0) {
+    lines.push(
+      'Removed at random (' + ELIMINATE_PERCENT + '%): ' +
+        removed.map((m) => m.name).join(', ') + '.'
+    );
+  }
+  const left = storedCount - planned.length - removed.length;
   if (left > 0) {
     lines.push(left + ' stored ' + (left === 1 ? 'match' : 'matches') + ' had no Over call and ' + (left === 1 ? 'was' : 'were') + ' left out.');
   }
