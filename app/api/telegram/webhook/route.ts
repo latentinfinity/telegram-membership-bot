@@ -94,9 +94,10 @@ import type { MasCycle } from '@/lib/masanielloStore';
 import { runPrediction, formatPrediction, PREDICT_USAGE } from '@/lib/predict';
 import {
   parseNewMatches,
-  planMatches,
-  buildTickets,
-  formatTickets,
+  planPool,
+  buildPoolTickets,
+  formatPoolTickets,
+  countByKind,
   ticketSizes,
   eliminateRandom,
   removalCount,
@@ -665,6 +666,13 @@ async function sendTicketText(chatId: number, text: string): Promise<boolean> {
   return false;
 }
 
+const KIND_LABEL: Record<string, string> = {
+  home: 'Home',
+  away: 'Away',
+  over35: 'Over 3.5',
+  over25: 'Over 2.5',
+};
+
 async function showTicketsMenu(chatId: number) {
   const c = await countStored();
   const n = c.ok ? c.count : 0;
@@ -729,7 +737,7 @@ async function handleTicketsAdd(chatId: number, adminId: number, rawText: string
   await showTicketsMenu(chatId);
 }
 
-// Lists the stored matches and which of them have an Over call.
+// Lists the stored matches and what each one qualifies as (or 'not used').
 async function handleTicketsView(chatId: number) {
   const l = await listStored();
   if (!l.ok) {
@@ -743,18 +751,17 @@ async function handleTicketsView(chatId: number) {
     return;
   }
 
-  const plan = planMatches(
+  const plan = planPool(
     l.rows.map((r) => ({ name: r.name, dataLine: r.dataLine, league: r.league }))
   );
-  const callById: Record<number, number> = {};
-  plan.matches.forEach((m) => {
-    callById[m.id] = m.call;
+  const kindById: Record<number, string> = {};
+  plan.pool.forEach((m) => {
+    kindById[m.id] = KIND_LABEL[m.kind];
   });
 
   const entries = l.rows.map(
     (r, i) =>
-      i + 1 + ') ' + r.name + ' · ' +
-      (callById[i + 1] ? 'Over ' + callById[i + 1] : 'no Over call') +
+      i + 1 + ') ' + r.name + ' · ' + (kindById[i + 1] || 'not used') +
       (r.league ? '\n' + r.league : '')
   );
 
@@ -792,22 +799,21 @@ async function handleTicketsCreateAsk(chatId: number) {
     return;
   }
 
-  const plan = planMatches(
+  const plan = planPool(
     l.rows.map((r) => ({ name: r.name, dataLine: r.dataLine, league: r.league }))
   );
-  const m = plan.matches.length;
+  const m = plan.pool.length;
   if (m === 0) {
     await sendMessage(
       chatId,
       'None of the ' + l.rows.length +
-        ' stored matches has an Over 3.5 or Over 2.5 call, so no tickets can be made. Nothing changed.'
+        ' stored matches qualifies (no Home or Away call, no Over 3.5 at 50% or more, no Over 2.5 at 60% or more), so no tickets can be made. Nothing changed.'
     );
     await showTicketsMenu(chatId);
     return;
   }
 
-  const n35 = plan.matches.filter((x) => x.call === 3.5).length;
-  const n25 = m - n35;
+  const k = countByKind(plan.pool);
   const cutCount = removalCount(m);
   const kept = m - cutCount;
   const sizes = ticketSizes(kept);
@@ -815,12 +821,15 @@ async function handleTicketsCreateAsk(chatId: number) {
     chatId,
     'Create tickets now?\n\n' +
       'Stored matches: ' + l.rows.length + '\n' +
-      'With an Over call: ' + m + ' (' + n35 + ' Over 3.5, ' + n25 + ' Over 2.5)\n' +
+      'Qualify: ' + m + ' (' + k.home + ' Home, ' + k.away + ' Away, ' + k.over35 +
+      ' Over 3.5, ' + k.over25 + ' Over 2.5)\n' +
       'Removed at random (' + ELIMINATE_PERCENT + '%): ' + cutCount +
       ' (' + kept + ' stay, chosen when you confirm)\n' +
       'Options: ' + kept * 2 + '\n' +
       'Tickets: ' + sizes.length + ' (sizes: ' + sizes.join(', ') + ')\n' +
-      'No Over call, left out: ' + (l.rows.length - m) + '\n\n' +
+      'Did not qualify, left out: ' + (l.rows.length - m) + '\n' +
+      'Top Over 3.5 list after the tickets: ' + plan.top.length +
+      (plan.top.length === 1 ? ' match' : ' matches') + '\n\n' +
       'The storage is emptied when the tickets are created (all ' + l.rows.length +
       ' matches). If sending fails, your matches are put back.',
     ticketsCreateConfirm()
@@ -858,15 +867,15 @@ async function handleTicketsCreateDo(chatId: number) {
   };
 
   try {
-    const plan = planMatches(
+    const plan = planPool(
       rows.map((r) => ({ name: r.name, dataLine: r.dataLine, league: r.league }))
     );
-    if (plan.matches.length === 0) {
-      await putBack('None of the stored matches has an Over call, so no tickets were made.');
+    if (plan.pool.length === 0) {
+      await putBack('None of the stored matches qualifies, so no tickets were made.');
     } else {
-      const cut = eliminateRandom(plan.matches);
-      const tickets = buildTickets(cut.kept.map((x) => ({ id: x.id, call: x.call })));
-      const messages = formatTickets(tickets, cut.kept, plan.stored, cut.removed);
+      const cut = eliminateRandom(plan.pool);
+      const tickets = buildPoolTickets(cut.kept.map((x) => ({ id: x.id, kind: x.kind })));
+      const messages = formatPoolTickets(tickets, cut.kept, plan.stored, cut.removed, plan.top);
 
       let failedAt = 0;
       for (let i = 0; i < messages.length; i++) {

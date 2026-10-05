@@ -16,7 +16,7 @@
 // No BigInt literals, so it compiles on any TS target.
 // ═══════════════════════════════════════════════════════════════
 
-import { runPrediction } from './predict';
+import { runPrediction, outcomeChances } from './predict';
 
 export const MAX_STORED_MATCHES = 100;
 export const MAX_NAME_LENGTH = 80;
@@ -115,18 +115,18 @@ function shuffle<T>(arr: T[], rand: () => number): T[] {
   return a;
 }
 
-// Builds the tickets. Random every call. Every rule always holds.
-// (Random, but not claimed to be perfectly uniform over all valid layouts.)
-export function buildTickets(
-  matches: TicketMatch[],
-  rand: () => number = Math.random
-): TicketOption[][] {
-  const sizes = ticketSizes(matches.length);
-  const tickets: TicketOption[][] = sizes.map(() => []);
-  if (matches.length === 0) return tickets;
+// Generic core: every item has exactly two options (a pair). Places each
+// option in a ticket so that all the ticket rules hold.
+type PairItem = { id: number; pair: [string, string] };
+type PairPlaced = { id: number; code: string };
+
+function buildFromPairs(items: PairItem[], rand: () => number): PairPlaced[][] {
+  const sizes = ticketSizes(items.length);
+  const tickets: PairPlaced[][] = sizes.map(() => []);
+  if (items.length === 0) return tickets;
 
   const rem = sizes.slice();
-  const order = shuffle(matches, rand);
+  const order = shuffle(items, rand);
 
   for (let k = 0; k < order.length; k++) {
     const m = order[k];
@@ -155,13 +155,30 @@ export function buildTickets(
       rem[j] -= 1;
     }
 
-    const opts = optionsFor(m.call);
     const flip = rand() < 0.5;
-    tickets[i].push({ matchId: m.id, line: flip ? opts[1] : opts[0] });
-    tickets[j].push({ matchId: m.id, line: flip ? opts[0] : opts[1] });
+    tickets[i].push({ id: m.id, code: flip ? m.pair[1] : m.pair[0] });
+    tickets[j].push({ id: m.id, code: flip ? m.pair[0] : m.pair[1] });
   }
 
   return tickets.map((t) => shuffle(t, rand));
+}
+
+// Builds the tickets. Random every call. Every rule always holds.
+// (Random, but not claimed to be perfectly uniform over all valid layouts.)
+export function buildTickets(
+  matches: TicketMatch[],
+  rand: () => number = Math.random
+): TicketOption[][] {
+  const placed = buildFromPairs(
+    matches.map((m) => {
+      const o = optionsFor(m.call);
+      return { id: m.id, pair: [String(o[0]), String(o[1])] as [string, string] };
+    }),
+    rand
+  );
+  return placed.map((t) =>
+    t.map((p) => ({ matchId: p.id, line: Number(p.code) as TicketLine }))
+  );
 }
 
 // Chance that a Poisson total with the given mean reaches at least `need`
@@ -183,6 +200,7 @@ export function chanceOverLine(totalMean: number, line: TicketLine): number {
   const need = line === 1.5 ? 2 : line === 2.5 ? 3 : 4;
   return chanceAtLeast(totalMean, need);
 }
+
 
 // ── Random removal ────────────────────────────────────────────────────────
 // How many of m matches to remove: percent of m rounded to the nearest whole
@@ -431,5 +449,275 @@ export function formatTickets(
     '% = model chance from expected goals (independent Poisson), an estimate, not a measured hit rate. The tickets are random every time.'
   );
   messages.push(lines.join('\n'));
+  return messages;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// POOL TICKETS — Outcome calls and Over calls together.
+//
+// Pool (a match gets ONE entry, the call with the highest confidence):
+//   every Home / Away call Predict makes (Draw calls are not used)
+//   every Over 3.5 call at 50% or more
+//   every Over 2.5 call at 60% or more
+// Percentages are compared as shown in Predict (rounded to a whole number).
+//
+// Two options per match:
+//   Home -> Home, Home/Draw (1X)        Away -> Away, Draw/Away (X2)
+//   Over 3.5 -> Over 3.5, Over 2.5      Over 2.5 -> Over 2.5, Over 1.5
+// Then the same ticket rules as before (buildFromPairs).
+// After the tickets: the top Over 3.5 calls (at most 5, at 50% or more).
+// ═══════════════════════════════════════════════════════════════
+
+export const MIN_OUTCOME_PERCENT = 0;
+export const MIN_OVER35_PERCENT = 50;
+export const MIN_OVER25_PERCENT = 60;
+export const TOP_OVER35_COUNT = 5;
+
+export type PoolKind = 'home' | 'away' | 'over35' | 'over25';
+export type OptionCode = 'H' | '1X' | 'A' | 'X2' | 'O1.5' | 'O2.5' | 'O3.5';
+
+export const OPTION_LABEL: Record<OptionCode, string> = {
+  H: 'Home',
+  '1X': 'Home/Draw (1X)',
+  A: 'Away',
+  X2: 'Draw/Away (X2)',
+  'O1.5': 'Over 1.5',
+  'O2.5': 'Over 2.5',
+  'O3.5': 'Over 3.5',
+};
+
+export function poolOptions(kind: PoolKind): [OptionCode, OptionCode] {
+  if (kind === 'home') return ['H', '1X'];
+  if (kind === 'away') return ['A', 'X2'];
+  if (kind === 'over35') return ['O3.5', 'O2.5'];
+  return ['O2.5', 'O1.5'];
+}
+
+export type PoolMatch = {
+  id: number; // 1-based position in the stored list
+  name: string;
+  league: string | null;
+  kind: PoolKind;
+  confidence: number; // chance of the main call, 0..1
+  chances: Partial<Record<OptionCode, number>>; // chance of each of its two options
+};
+
+export type TopOver35 = {
+  id: number;
+  name: string;
+  league: string | null;
+  over35: number; // the Over 3.5 chance Predict shows
+  over25: number; // the same match as Over 2.5
+};
+
+export type PoolPlan = {
+  stored: number;
+  pool: PoolMatch[];
+  top: TopOver35[];
+  unreadable: string[];
+};
+
+function bigGcd(a: bigint, b: bigint): bigint {
+  let x = a;
+  let y = b;
+  while (y !== BigInt(0)) {
+    const t = x % y;
+    x = y;
+    y = t;
+  }
+  return x;
+}
+
+// (x + y) / 2 for two plain decimals, calculated exactly and then turned into
+// a number the same way predict.ts does it, so the result is identical.
+function halfSum(x: string, y: string): number | null {
+  const sx = x.trim();
+  const sy = y.trim();
+  const re = /^\d{1,9}(\.\d{1,9})?$/;
+  if (!re.test(sx) || !re.test(sy)) return null;
+  const scaled = (t: string): bigint => {
+    const dot = t.indexOf('.');
+    const whole = dot === -1 ? t : t.slice(0, dot);
+    let frac = dot === -1 ? '' : t.slice(dot + 1);
+    while (frac.length < 9) frac += '0';
+    return BigInt(whole + frac);
+  };
+  let n = scaled(sx) + scaled(sy);
+  let d = BigInt(2000000000);
+  const g = bigGcd(n, d);
+  if (g > BigInt(1)) {
+    n = n / g;
+    d = d / g;
+  }
+  return Number(n) / Number(d);
+}
+
+export function expectedGoals(dataLine: string): { eH: number; eA: number } | null {
+  const parts = dataLine.split(',').map((p) => p.trim());
+  const nums = parts.length === 6 ? parts.slice(2) : parts;
+  if (nums.length !== 4) return null;
+  const eH = halfSum(nums[0], nums[3]); // a1 + b2
+  const eA = halfSum(nums[2], nums[1]); // b1 + a2
+  if (eH === null || eA === null) return null;
+  return { eH, eA };
+}
+
+const percentShown = (c: number): number => Math.round(c * 100);
+const cap1 = (x: number): number => (x > 1 ? 1 : x < 0 ? 0 : x);
+
+export function planPool(stored: StoredMatch[]): PoolPlan {
+  const text = stored
+    .map((m, i) => i + 1 + ') ' + m.name + '\n' + m.dataLine)
+    .join('\n\n');
+  const res = runPrediction(text);
+  const byNum: Record<number, PoolMatch> = {};
+
+  const offer = (cand: PoolMatch) => {
+    const have = byNum[cand.id];
+    if (!have || cand.confidence > have.confidence) byNum[cand.id] = cand;
+  };
+  const base = (num: number) => {
+    const s = stored[num - 1];
+    return s ? { id: num, name: s.name, league: s.league || null } : null;
+  };
+
+  res.outcomes.forEach((o) => {
+    if (o.side === 'Draw') return;
+    if (percentShown(o.confidence) < MIN_OUTCOME_PERCENT) return;
+    const b = base(o.num);
+    const eg = b ? expectedGoals(stored[o.num - 1].dataLine) : null;
+    if (!b || !eg) return;
+    const ch = outcomeChances(eg.eH, eg.eA);
+    if (o.side === 'Home') {
+      offer({ ...b, kind: 'home', confidence: o.confidence, chances: { H: o.confidence, '1X': cap1(ch.home + ch.draw) } });
+    } else {
+      offer({ ...b, kind: 'away', confidence: o.confidence, chances: { A: o.confidence, X2: cap1(ch.away + ch.draw) } });
+    }
+  });
+  res.over35.forEach((o) => {
+    if (percentShown(o.confidence) < MIN_OVER35_PERCENT) return;
+    const b = base(o.num);
+    if (!b) return;
+    offer({ ...b, kind: 'over35', confidence: o.confidence, chances: { 'O3.5': o.confidence, 'O2.5': chanceOverLine(o.total, 2.5) } });
+  });
+  res.over25.forEach((o) => {
+    if (percentShown(o.confidence) < MIN_OVER25_PERCENT) return;
+    const b = base(o.num);
+    if (!b) return;
+    offer({ ...b, kind: 'over25', confidence: o.confidence, chances: { 'O2.5': o.confidence, 'O1.5': chanceOverLine(o.total, 1.5) } });
+  });
+
+  const pool = Object.keys(byNum)
+    .map((k) => byNum[Number(k)])
+    .sort((a, b) => a.id - b.id);
+
+  const top: TopOver35[] = [];
+  res.over35.forEach((o) => {
+    if (top.length >= TOP_OVER35_COUNT) return;
+    if (percentShown(o.confidence) < MIN_OVER35_PERCENT) return;
+    const b = base(o.num);
+    if (!b) return;
+    top.push({ ...b, over35: o.confidence, over25: chanceOverLine(o.total, 2.5) });
+  });
+
+  const unreadable = res.skipped.map((s) => (stored[s.num - 1] ? stored[s.num - 1].name : '#' + s.num));
+  return { stored: stored.length, pool, top, unreadable };
+}
+
+export type PoolTicketOption = { matchId: number; option: OptionCode };
+
+export function buildPoolTickets(
+  items: { id: number; kind: PoolKind }[],
+  rand: () => number = Math.random
+): PoolTicketOption[][] {
+  const placed = buildFromPairs(
+    items.map((m) => {
+      const o = poolOptions(m.kind);
+      return { id: m.id, pair: [o[0], o[1]] as [string, string] };
+    }),
+    rand
+  );
+  return placed.map((t) =>
+    t.map((p) => ({ matchId: p.id, option: p.code as OptionCode }))
+  );
+}
+
+export function countByKind(pool: PoolMatch[]): { home: number; away: number; over35: number; over25: number } {
+  const c = { home: 0, away: 0, over35: 0, over25: 0 };
+  pool.forEach((m) => {
+    c[m.kind] += 1;
+  });
+  return c;
+}
+
+// Messages: one per ticket, then a summary, then the top Over 3.5 list.
+// pool = the matches that are in the tickets; removed = taken out at random.
+export function formatPoolTickets(
+  tickets: PoolTicketOption[][],
+  pool: PoolMatch[],
+  storedCount: number,
+  removed: PoolMatch[],
+  top: TopOver35[]
+): string[] {
+  const byId: Record<number, PoolMatch> = {};
+  pool.forEach((m) => {
+    byId[m.id] = m;
+  });
+
+  const messages: string[] = [];
+  tickets.forEach((ticket, ti) => {
+    const rows = ticket.map((o) => {
+      const m = byId[o.matchId];
+      return { name: m.name, league: m.league, id: o.matchId, option: o.option, chance: m.chances[o.option] || 0 };
+    });
+    rows.sort((a, b) => (b.chance !== a.chance ? b.chance - a.chance : a.id - b.id));
+    const body = rows
+      .map(
+        (r, i) =>
+          i + 1 + ') ' + r.name + (r.league ? '\n' + r.league : '') +
+          '\n' + OPTION_LABEL[r.option] + ' · ' + Math.round(r.chance * 100) + '%'
+      )
+      .join('\n\n');
+    messages.push(
+      'TICKET ' + (ti + 1) + ' of ' + tickets.length + ' (' + ticket.length + ' ' +
+        (ticket.length === 1 ? 'match' : 'matches') + ')\n\n' + body
+    );
+  });
+
+  const k = countByKind(pool);
+  const lines: string[] = [];
+  lines.push(tickets.length + ' tickets from ' + pool.length + ' matches (' + pool.length * 2 + ' options).');
+  lines.push('In the tickets: ' + k.home + ' Home, ' + k.away + ' Away, ' + k.over35 + ' Over 3.5, ' + k.over25 + ' Over 2.5.');
+  if (removed.length > 0) {
+    lines.push('Removed at random (' + ELIMINATE_PERCENT + '%): ' + removed.map((m) => m.name).join(', ') + '.');
+  }
+  const left = storedCount - pool.length - removed.length;
+  if (left > 0) {
+    lines.push(left + ' stored ' + (left === 1 ? 'match' : 'matches') + ' did not qualify and ' + (left === 1 ? 'was' : 'were') + ' left out.');
+  }
+  lines.push('Every match appears in two different tickets, once per option, so if it goes wrong both tickets lose that leg.');
+  lines.push('% = model chance from expected goals (independent Poisson), an estimate, not a measured hit rate. The tickets are random every time.');
+  messages.push(lines.join('\n'));
+
+  if (top.length === 0) {
+    messages.push('TOP OVER 3.5\n\nNo Over 3.5 call at ' + MIN_OVER35_PERCENT + '% or more this time.');
+  } else {
+    const removedIds: Record<number, boolean> = {};
+    removed.forEach((m) => {
+      removedIds[m.id] = true;
+    });
+    const body = top
+      .map(
+        (t, i) =>
+          i + 1 + ') ' + t.name + (t.league ? '\n' + t.league : '') +
+          '\nOver 3.5 · ' + Math.round(t.over35 * 100) + '% (as Over 2.5: ' + Math.round(t.over25 * 100) + '%)' +
+          (removedIds[t.id] ? '\n(removed at random, not in the tickets)' : '')
+      )
+      .join('\n\n');
+    messages.push(
+      'TOP OVER 3.5 (highest first)\n\n' + body +
+        '\n\nThese matches are also in the tickets above. In your past results the Over 3.5 % ran about 5 points higher than what happened; the Over 2.5 % was close.'
+    );
+  }
   return messages;
 }
