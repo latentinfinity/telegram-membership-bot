@@ -97,6 +97,8 @@ import {
   planPool,
   buildPoolTickets,
   formatPoolTickets,
+  planTeams,
+  formatTeamLists,
   countByKind,
   ticketSizes,
   eliminateRandom,
@@ -814,6 +816,9 @@ async function handleTicketsCreateAsk(chatId: number) {
   }
 
   const k = countByKind(plan.pool);
+  const teams = planTeams(
+    l.rows.map((r) => ({ name: r.name, dataLine: r.dataLine, league: r.league }))
+  );
   const cutCount = removalCount(m);
   const kept = m - cutCount;
   const sizes = ticketSizes(kept);
@@ -829,7 +834,9 @@ async function handleTicketsCreateAsk(chatId: number) {
       'Tickets: ' + sizes.length + ' (sizes: ' + sizes.join(', ') + ')\n' +
       'Did not qualify, left out: ' + (l.rows.length - m) + '\n' +
       'Top Over 3.5 list after the tickets: ' + plan.top.length +
-      (plan.top.length === 1 ? ' match' : ' matches') + '\n\n' +
+      (plan.top.length === 1 ? ' match' : ' matches') + '\n' +
+      'Team lists after that: ' + teams.over15.length + ' teams Over 1.5, ' +
+      teams.over05.length + ' teams Over 0.5\n\n' +
       'The storage is emptied when the tickets are created (all ' + l.rows.length +
       ' matches). If sending fails, your matches are put back.',
     ticketsCreateConfirm()
@@ -875,7 +882,16 @@ async function handleTicketsCreateDo(chatId: number) {
     } else {
       const cut = eliminateRandom(plan.pool);
       const tickets = buildPoolTickets(cut.kept.map((x) => ({ id: x.id, kind: x.kind })));
-      const messages = formatPoolTickets(tickets, cut.kept, plan.stored, cut.removed, plan.top);
+      const teamLists = planTeams(
+        rows.map((r) => ({ name: r.name, dataLine: r.dataLine, league: r.league }))
+      );
+      const messages = formatPoolTickets(
+        tickets,
+        cut.kept,
+        plan.stored,
+        cut.removed,
+        plan.top
+      ).concat(formatTeamLists(teamLists));
 
       let failedAt = 0;
       for (let i = 0; i < messages.length; i++) {

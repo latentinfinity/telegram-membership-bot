@@ -17,6 +17,7 @@
 // ═══════════════════════════════════════════════════════════════
 
 import { runPrediction, outcomeChances } from './predict';
+import { calibratedScores } from './correctScore';
 
 export const MAX_STORED_MATCHES = 100;
 export const MAX_NAME_LENGTH = 80;
@@ -720,4 +721,128 @@ export function formatPoolTickets(
     );
   }
   return messages;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// TEAM LISTS — which TEAMS are predicted to score.
+//
+// For every stored match and each of its two teams, look at the goals the two
+// formulas predict for that team (a "5" means 5 or more):
+//   both formulas 3 or more                  -> "Teams to score Over 1.5"
+//   both formulas 2 or more, not both 3+     -> "Teams to score Over 0.5"
+//   anything else                            -> not listed
+// A team is in at most one list. The lists use ALL stored matches (the random
+// removal and the Outcome / Over thresholds do not apply to them).
+//
+// Confidence = chance the team scores at least 2 goals (Over 1.5) or at least
+// 1 goal (Over 0.5), goals ~ Poisson(the team's expected goals). An estimate,
+// not a measured hit rate.
+// ═══════════════════════════════════════════════════════════════
+
+export type TeamEntry = {
+  team: string;
+  matchLine: string; // "A vs B"
+  league: string | null;
+  confidence: number; // 0..1
+  order: number; // position in the stored list, home before away
+};
+
+export type TeamLists = { over15: TeamEntry[]; over05: TeamEntry[] };
+
+// "Home - Away", "Home vs Away" or "Home v Away" -> the two team names.
+export function splitTeams(name: string): { home: string; away: string } | null {
+  const m = name.match(/^(.+?)\s+(?:-|vs\.?|v)\s+(.+)$/i);
+  if (!m) return null;
+  const home = m[1].trim();
+  const away = m[2].trim();
+  if (!home || !away) return null;
+  return { home, away };
+}
+
+export function planTeams(stored: StoredMatch[]): TeamLists {
+  const over15: TeamEntry[] = [];
+  const over05: TeamEntry[] = [];
+
+  stored.forEach((m, idx) => {
+    const parts = m.dataLine.split(',').map((p) => p.trim());
+    const nums = parts.length === 6 ? parts.slice(2) : parts;
+    if (nums.length !== 4) return;
+    const cs = calibratedScores(nums[0], nums[1], nums[2], nums[3]);
+    const eg = expectedGoals(m.dataLine);
+    if (!cs || !eg) return;
+    const teams = splitTeams(m.name);
+    const league = m.league || null;
+    const sides: { side: 'home' | 'away'; lam: number; p: number; x: number }[] = [
+      { side: 'home', lam: eg.eH, p: cs.prod.home, x: cs.exp.home },
+      { side: 'away', lam: eg.eA, p: cs.prod.away, x: cs.exp.away },
+    ];
+    sides.forEach((s, k) => {
+      const low = Math.min(s.p, s.x);
+      if (low < 2) return;
+      const team = teams
+        ? s.side === 'home' ? teams.home : teams.away
+        : (s.side === 'home' ? 'Home team' : 'Away team') + ' of ' + m.name;
+      const entry: TeamEntry = {
+        team,
+        matchLine: teams ? teams.home + ' vs ' + teams.away : m.name,
+        league,
+        confidence: chanceAtLeast(s.lam, low >= 3 ? 2 : 1),
+        order: idx * 2 + k,
+      };
+      if (low >= 3) over15.push(entry);
+      else over05.push(entry);
+    });
+  });
+
+  const byConfidence = (a: TeamEntry, b: TeamEntry): number =>
+    b.confidence !== a.confidence ? b.confidence - a.confidence : a.order - b.order;
+  over15.sort(byConfidence);
+  over05.sort(byConfidence);
+  return { over15, over05 };
+}
+
+// One list as one or more messages (each under about 3,500 characters). The
+// title is glued to the first entry, the note goes at the end.
+function formatTeamList(title: string, label: string, entries: TeamEntry[], note: string): string[] {
+  if (entries.length === 0) {
+    return [title + '\n\nNone this time.'];
+  }
+  const blocks = entries.map(
+    (e, i) =>
+      i + 1 + ') ' + e.team + ' ' + label + ' ' + Math.round(e.confidence * 100) + '%\n' +
+      e.matchLine + (e.league ? ' (' + e.league + ')' : '')
+  );
+  const chunks: string[] = [];
+  let current = title + '\n\n' + blocks[0];
+  for (let i = 1; i < blocks.length; i++) {
+    if (current.length + blocks[i].length + 2 > 3500) {
+      chunks.push(current);
+      current = blocks[i];
+    } else {
+      current += '\n\n' + blocks[i];
+    }
+  }
+  if (current.length + note.length + 2 > 3900) {
+    chunks.push(current);
+    chunks.push(note);
+  } else {
+    chunks.push(current + '\n\n' + note);
+  }
+  return chunks;
+}
+
+export function formatTeamLists(lists: TeamLists): string[] {
+  const a = formatTeamList(
+    'Teams to score Over 1.5:',
+    'Over 1.5',
+    lists.over15,
+    '% = the model chance the team scores at least 2 goals, an estimate. In your past results it was close overall, but away teams ran about 8 points higher than what happened.'
+  );
+  const b = formatTeamList(
+    'Teams to score Over 0.5:',
+    'Over 0.5',
+    lists.over05,
+    '% = the model chance the team scores at least 1 goal, an estimate. In your past results it ran about 4 points higher than what happened.'
+  );
+  return a.concat(b);
 }
