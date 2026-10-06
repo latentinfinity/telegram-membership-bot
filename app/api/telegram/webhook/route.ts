@@ -92,20 +92,17 @@ import {
 } from '@/lib/masanielloStore';
 import type { MasCycle } from '@/lib/masanielloStore';
 import { runPrediction, formatPrediction, PREDICT_USAGE } from '@/lib/predict';
+import { parseNewMatches, MAX_STORED_MATCHES } from '@/lib/tickets';
 import {
-  parseNewMatches,
-  planPool,
-  buildPoolTickets,
-  formatPoolTickets,
-  planTeams,
-  formatTeamLists,
-  countByKind,
-  ticketSizes,
-  eliminateRandom,
-  removalCount,
-  ELIMINATE_PERCENT,
-  MAX_STORED_MATCHES,
-} from '@/lib/tickets';
+  analyseMatch,
+  planRules,
+  dealTickets,
+  describePlan,
+  formatTicketMessages,
+  formatSummary,
+  formatTopOver35,
+} from '@/lib/ruleTickets';
+import type { RuleRow } from '@/lib/ruleTickets';
 import {
   listStored,
   countStored,
@@ -668,12 +665,10 @@ async function sendTicketText(chatId: number, text: string): Promise<boolean> {
   return false;
 }
 
-const KIND_LABEL: Record<string, string> = {
-  home: 'Home',
-  away: 'Away',
-  over35: 'Over 3.5',
-  over25: 'Over 2.5',
-};
+// Stored rows use dataLine; the rules module expects data_line.
+function toRuleRow(r: { name: string; dataLine: string; league: string | null }): RuleRow {
+  return { name: r.name, data_line: r.dataLine, league: r.league };
+}
 
 async function showTicketsMenu(chatId: number) {
   const c = await countStored();
@@ -739,7 +734,8 @@ async function handleTicketsAdd(chatId: number, adminId: number, rawText: string
   await showTicketsMenu(chatId);
 }
 
-// Lists the stored matches and what each one qualifies as (or 'not used').
+// Lists the stored matches and the legs each one has under the rules
+// (or 'no call').
 async function handleTicketsView(chatId: number) {
   const l = await listStored();
   if (!l.ok) {
@@ -753,19 +749,15 @@ async function handleTicketsView(chatId: number) {
     return;
   }
 
-  const plan = planPool(
-    l.rows.map((r) => ({ name: r.name, dataLine: r.dataLine, league: r.league }))
-  );
-  const kindById: Record<number, string> = {};
-  plan.pool.forEach((m) => {
-    kindById[m.id] = KIND_LABEL[m.kind];
+  const entries = l.rows.map((r, i) => {
+    const a = analyseMatch(toRuleRow(r));
+    const what = !a
+      ? 'could not be read'
+      : a.legs.length === 0
+        ? 'no call'
+        : a.legs.map((x) => x.label).join(' | ');
+    return i + 1 + ') ' + r.name + ' · ' + what + (r.league ? '\n' + r.league : '');
   });
-
-  const entries = l.rows.map(
-    (r, i) =>
-      i + 1 + ') ' + r.name + ' · ' + (kindById[i + 1] || 'not used') +
-      (r.league ? '\n' + r.league : '')
-  );
 
   const chunks: string[] = [];
   let current = 'STORED MATCHES (' + l.rows.length + ')\n';
@@ -801,46 +793,13 @@ async function handleTicketsCreateAsk(chatId: number) {
     return;
   }
 
-  const plan = planPool(
-    l.rows.map((r) => ({ name: r.name, dataLine: r.dataLine, league: r.league }))
-  );
-  const m = plan.pool.length;
-  if (m === 0) {
-    await sendMessage(
-      chatId,
-      'None of the ' + l.rows.length +
-        ' stored matches qualifies (no Home or Away call, no Over 3.5 at 50% or more, no Over 2.5 at 60% or more), so no tickets can be made. Nothing changed.'
-    );
+  const plan = planRules(l.rows.map(toRuleRow));
+  if (!plan.canBuild) {
+    await sendMessage(chatId, describePlan(plan));
     await showTicketsMenu(chatId);
     return;
   }
-
-  const k = countByKind(plan.pool);
-  const teams = planTeams(
-    l.rows.map((r) => ({ name: r.name, dataLine: r.dataLine, league: r.league }))
-  );
-  const cutCount = removalCount(m);
-  const kept = m - cutCount;
-  const sizes = ticketSizes(kept);
-  await sendMessage(
-    chatId,
-    'Create tickets now?\n\n' +
-      'Stored matches: ' + l.rows.length + '\n' +
-      'Qualify: ' + m + ' (' + k.home + ' Home, ' + k.away + ' Away, ' + k.over35 +
-      ' Over 3.5, ' + k.over25 + ' Over 2.5)\n' +
-      'Removed at random (' + ELIMINATE_PERCENT + '%): ' + cutCount +
-      ' (' + kept + ' stay, chosen when you confirm)\n' +
-      'Options: ' + kept * 2 + '\n' +
-      'Tickets: ' + sizes.length + ' (sizes: ' + sizes.join(', ') + ')\n' +
-      'Did not qualify, left out: ' + (l.rows.length - m) + '\n' +
-      'Top Over 3.5 list after the tickets: ' + plan.top.length +
-      (plan.top.length === 1 ? ' match' : ' matches') + '\n' +
-      'Team lists after that: ' + teams.over15.length + ' teams Over 1.5, ' +
-      teams.over05.length + ' teams Over 0.5\n\n' +
-      'The storage is emptied when the tickets are created (all ' + l.rows.length +
-      ' matches). If sending fails, your matches are put back.',
-    ticketsCreateConfirm()
-  );
+  await sendMessage(chatId, describePlan(plan), ticketsCreateConfirm());
 }
 
 // Step 2: take every stored match (atomically), build and send the tickets.
@@ -874,24 +833,15 @@ async function handleTicketsCreateDo(chatId: number) {
   };
 
   try {
-    const plan = planPool(
-      rows.map((r) => ({ name: r.name, dataLine: r.dataLine, league: r.league }))
-    );
-    if (plan.pool.length === 0) {
-      await putBack('None of the stored matches qualifies, so no tickets were made.');
+    const plan = planRules(rows.map(toRuleRow));
+    if (!plan.canBuild) {
+      await putBack('No tickets were made. ' + (plan.reason || ''));
     } else {
-      const cut = eliminateRandom(plan.pool);
-      const tickets = buildPoolTickets(cut.kept.map((x) => ({ id: x.id, kind: x.kind })));
-      const teamLists = planTeams(
-        rows.map((r) => ({ name: r.name, dataLine: r.dataLine, league: r.league }))
-      );
-      const messages = formatPoolTickets(
-        tickets,
-        cut.kept,
-        plan.stored,
-        cut.removed,
-        plan.top
-      ).concat(formatTeamLists(teamLists));
+      const deal = dealTickets(plan);
+      const messages = formatTicketMessages(plan, deal).concat([
+        formatSummary(plan, deal),
+        formatTopOver35(plan, deal),
+      ]);
 
       let failedAt = 0;
       for (let i = 0; i < messages.length; i++) {
