@@ -17,7 +17,6 @@
 //   BTTS Yes  : both teams 2+
 //   Under 3.5 : score is 0:0, 1:0 or 0:1
 //   Team Over 1.5 : that team 3+
-//   Team Over 0.5 : that team exactly 2
 //
 // One match can carry several legs. A ticket holds at most ONE leg per
 // match. Every leg is used at most once across all tickets.
@@ -57,9 +56,7 @@ export type CallKind =
   | 'btts'
   | 'under35'
   | 'home_t15'
-  | 'away_t15'
-  | 'home_t05'
-  | 'away_t05';
+  | 'away_t15';
 
 export type Leg = { label: string; group: string };
 
@@ -136,8 +133,6 @@ export function callsFromScores(p: ScorePair, e: ScorePair): CallKind[] {
 
   if (both(function (h) { return h >= 3; })) out.push('home_t15');
   if (both(function (h, a) { return a >= 3; })) out.push('away_t15');
-  if (both(function (h) { return h === 2; })) out.push('home_t05');
-  if (both(function (h, a) { return a === 2; })) out.push('away_t05');
 
   return out;
 }
@@ -187,12 +182,8 @@ function legFor(kind: CallKind, teams: { home: string; away: string }): Leg {
       return { label: 'Under 3.5', group: 'Under 3.5' };
     case 'home_t15':
       return { label: shorten(teams.home, MAX_TEAM_SHOWN) + ' Over 1.5', group: 'Team Over 1.5' };
-    case 'away_t15':
-      return { label: shorten(teams.away, MAX_TEAM_SHOWN) + ' Over 1.5', group: 'Team Over 1.5' };
-    case 'home_t05':
-      return { label: shorten(teams.home, MAX_TEAM_SHOWN) + ' Over 0.5', group: 'Team Over 0.5' };
     default:
-      return { label: shorten(teams.away, MAX_TEAM_SHOWN) + ' Over 0.5', group: 'Team Over 0.5' };
+      return { label: shorten(teams.away, MAX_TEAM_SHOWN) + ' Over 1.5', group: 'Team Over 1.5' };
   }
 }
 
@@ -391,7 +382,6 @@ const GROUP_ORDER = [
   'BTTS Yes',
   'Under 3.5',
   'Team Over 1.5',
-  'Team Over 0.5',
 ];
 
 export function formatTicketMessages(plan: RulePlan, deal: DealResult): string[] {
