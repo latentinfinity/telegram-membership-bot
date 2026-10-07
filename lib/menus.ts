@@ -272,6 +272,8 @@ export function ticketsMenu(storedCount: number): InlineKeyboard {
       },
     ]);
     rows.push([{ text: '📋 View Stored Matches', callback_data: 'a_tk_view' }]);
+    // NEW: Confidence list (reads the storage, does not empty it)
+    rows.push([{ text: '🎯 Confidence', callback_data: 'a_tk_conf' }]);
     rows.push([{ text: '🗑 Clear Matches', callback_data: 'a_tk_clear' }]);
   }
   rows.push([{ text: '⬅️ Admin Panel', callback_data: 'admin_menu' }]);

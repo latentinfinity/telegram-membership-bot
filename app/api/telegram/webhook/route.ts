@@ -103,6 +103,7 @@ import {
   formatTopOver35,
 } from '@/lib/ruleTickets';
 import type { RuleRow } from '@/lib/ruleTickets';
+import { planConfidence, formatConfidence } from '@/lib/confidence'; // NEW
 import {
   listStored,
   countStored,
@@ -779,6 +780,33 @@ async function handleTicketsView(chatId: number) {
   }
 }
 
+// NEW: Confidence. Shows the stored matches that fit the three Confidence
+// rules (Under 3.5, Over 2.5, Double Chance). Only reads the storage, never
+// changes it.
+async function handleTicketsConfidence(chatId: number) {
+  const l = await listStored();
+  if (!l.ok) {
+    await sendMessage(chatId, '❌ Could not read the storage: ' + l.error);
+    await showTicketsMenu(chatId);
+    return;
+  }
+  if (l.rows.length === 0) {
+    await sendMessage(chatId, 'The storage is empty. Add matches first.');
+    await showTicketsMenu(chatId);
+    return;
+  }
+
+  const plan = planConfidence(l.rows.map(toRuleRow));
+  const chunks = formatConfidence(plan);
+  for (let i = 0; i < chunks.length; i++) {
+    if (i === chunks.length - 1) {
+      await sendMessage(chatId, chunks[i], ticketsBackKeyboard());
+    } else {
+      await sendMessage(chatId, chunks[i]);
+    }
+  }
+}
+
 // Step 1 of creating tickets: show what will happen and ask to confirm.
 async function handleTicketsCreateAsk(chatId: number) {
   const l = await listStored();
@@ -1133,6 +1161,8 @@ async function handleAdminButton(
     await sendForceReply(chatId, PROMPTS.tkAdd);
   } else if (data === 'a_tk_view') {
     await handleTicketsView(chatId);
+  } else if (data === 'a_tk_conf') {
+    await handleTicketsConfidence(chatId); // NEW
   } else if (data === 'a_tk_create') {
     await handleTicketsCreateAsk(chatId);
   } else if (data === 'a_tk_create_yes') {
