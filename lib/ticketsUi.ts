@@ -6,7 +6,8 @@
 //   a_tk_menu        Tickets menu
 //   a_tk_add         Add Matches (force-reply prompt)
 //   a_tk_create      Create Tickets (confirm), a_tk_create_yes (do it)
-//   a_tk_pair        Pair Tickets (new): two options per best match
+//   a_tk_pair        Best Options: the pool matches with one option each (a list, no tickets)
+//   a_tk_roll        Roll Over Matches: Over 2.5 then Over 1.5 list outside the pool
 //   a_tk_view        View Stored Matches
 //   a_tk_conf        Confidence lists
 //   a_tk_clear       Clear Matches (confirm), a_tk_clear_yes (do it)
@@ -29,7 +30,8 @@ import {
 } from '@/lib/ruleTickets';
 import type { RuleRow } from '@/lib/ruleTickets';
 import { planConfidence, formatConfidence } from '@/lib/confidence';
-import { planPairs, dealPairs, describePairPlan, formatPairTickets } from '@/lib/pairTickets';
+import { planPairs, formatPairList } from '@/lib/pairTickets';
+import { planRollOver, formatRollOver } from '@/lib/rollOver';
 import {
   listStored,
   countStored,
@@ -50,7 +52,8 @@ function tkMenu(storedCount: number): InlineKeyboard {
         callback_data: 'a_tk_create',
       },
     ]);
-    rows.push([{ text: '🧩 Pair Tickets', callback_data: 'a_tk_pair' }]);
+    rows.push([{ text: '🧩 Best Options', callback_data: 'a_tk_pair' }]);
+    rows.push([{ text: '📈 Roll Over Matches', callback_data: 'a_tk_roll' }]);
     rows.push([{ text: '📋 View Stored Matches', callback_data: 'a_tk_view' }]);
     rows.push([{ text: '🎯 Confidence', callback_data: 'a_tk_conf' }]);
     rows.push([{ text: '🗑 Clear Matches', callback_data: 'a_tk_clear' }]);
@@ -261,7 +264,7 @@ async function handleTicketsConfidence(chatId: number) {
   }
 }
 
-// ── Pair Tickets (read only, the storage is not emptied) ──────────────────
+// ── Best Options (read only): the pool matches, one option each ───────────
 async function handleTicketsPair(chatId: number) {
   const l = await listStored();
   if (!l.ok) {
@@ -276,32 +279,39 @@ async function handleTicketsPair(chatId: number) {
   }
 
   const plan = planPairs(l.rows.map(toRuleRow));
-  if (!plan.canBuild) {
-    await sendMessage(chatId, describePairPlan(plan));
+  const chunks = formatPairList(plan);
+  for (let i = 0; i < chunks.length; i++) {
+    if (i === chunks.length - 1) {
+      await sendMessage(chatId, chunks[i], tkBack());
+    } else {
+      await sendMessage(chatId, chunks[i]);
+    }
+  }
+}
+
+// ── Roll Over Matches (read only): Over 2.5 first, then Over 1.5 ──────────
+async function handleTicketsRoll(chatId: number) {
+  const l = await listStored();
+  if (!l.ok) {
+    await sendMessage(chatId, '❌ Could not read the storage: ' + l.error);
+    await showTicketsMenu(chatId);
+    return;
+  }
+  if (l.rows.length === 0) {
+    await sendMessage(chatId, 'The storage is empty. Add matches first.');
     await showTicketsMenu(chatId);
     return;
   }
 
-  const deal = dealPairs(plan);
-  const messages = formatPairTickets(plan, deal);
-
-  let failedAt = 0;
-  for (let i = 0; i < messages.length; i++) {
-    const sent = await sendTicketText(chatId, messages[i]);
-    if (!sent) {
-      failedAt = i + 1;
-      break;
+  const plan = planRollOver(l.rows.map(toRuleRow));
+  const chunks = formatRollOver(plan);
+  for (let i = 0; i < chunks.length; i++) {
+    if (i === chunks.length - 1) {
+      await sendMessage(chatId, chunks[i], tkBack());
+    } else {
+      await sendMessage(chatId, chunks[i]);
     }
-    if (i < messages.length - 1) await sleep(300);
   }
-  if (failedAt > 0) {
-    await sendMessage(
-      chatId,
-      '❌ Sending stopped at message ' + failedAt + ' of ' + messages.length +
-        '. Ignore the tickets sent above, they are not a complete set. Your matches are still stored: tap Pair Tickets again.'
-    );
-  }
-  await showTicketsMenu(chatId);
 }
 
 // ── Create Tickets (the 13-call rules; empties the storage) ───────────────
@@ -441,6 +451,8 @@ export async function handleTicketsButton(
     await handleTicketsConfidence(chatId);
   } else if (data === 'a_tk_pair') {
     await handleTicketsPair(chatId);
+  } else if (data === 'a_tk_roll') {
+    await handleTicketsRoll(chatId);
   } else if (data === 'a_tk_create') {
     await handleTicketsCreateAsk(chatId);
   } else if (data === 'a_tk_create_yes') {

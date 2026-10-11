@@ -1,9 +1,10 @@
 // ═══════════════════════════════════════════════════════════════
-// PAIR TICKETS — tickets from the best matches, two options each.
+// BEST OPTIONS (file name kept from the old "Pair Tickets").
 // Pure functions, no DB / Telegram imports. Only ./confidence.
 //
-// POOL: matches where BOTH formulas give BOTH teams 2 or more (the
-// Confidence "Over 2.5" group). Only pool matches can earn options.
+// NO TICKETS ARE CREATED HERE. It is a list: every match in the 2+ pool
+// (both formulas give both teams 2 or more) that earns an option, with
+// ONE option each.
 //
 // Options a pool match EARNS (a1 home scored, a2 home conceded,
 // b1 away scored, b2 away conceded; eH = (a1+b2)/2, eA = (b1+a2)/2):
@@ -12,29 +13,15 @@
 //   BTTS Yes + Over 2.5 : both of the two rules above
 //   Over 3.5            : total >= 4.0
 //
-// A match that earns more than two options gets TWO of them, picked at
-// random (no preference). A match that earns one gets one. A match that
-// earns none is not used.
-//
-// TICKETS: 4 to 7 matches each, any size in that range with no preferred
-// size. A ticket never holds the same match twice. Every leg (match +
-// option) is used at most once. Which leg of a match goes into which
-// ticket is random. To avoid wasting legs, 200 random layouts are drawn
-// and one that leaves the fewest legs unused is kept (ties random).
-// No percentages are used. No accuracy is promised.
+// A match that earns several gets the HARDEST one it earned, in this
+// order (PAIR_PRIORITY): Over 3.5, BTTS Yes + Over 2.5, Over 2.5, BTTS Yes.
+// A match that earns nothing is not listed.
+// All comparisons are exact. No percentages. The storage is only read.
 // ═══════════════════════════════════════════════════════════════
 
 import { planConfidence } from './confidence';
 import type { ConfidencePick } from './confidence';
 import { TRAINING_ROWS } from './correctScore';
-
-// ── Quick-change constants ────────────────────────────────────────────────
-export const PAIR_MIN_PER_TICKET = 4;
-export const PAIR_MAX_PER_TICKET = 7;
-export const OPTIONS_PER_MATCH = 2;
-export const LAYOUT_TRIES = 200;
-const MAX_NAME_SHOWN = 60;
-const MAX_LEAGUE_SHOWN = 60;
 
 // ── Types ─────────────────────────────────────────────────────────────────
 export type PairRow = {
@@ -52,29 +39,49 @@ export const PAIR_OPTION_LABEL: { [k: string]: string } = {
   over35: 'Over 3.5',
 };
 
-export type PairMatch = {
+// hardest first: the first one a match earned is the one it gets
+export const PAIR_PRIORITY: PairOption[] = ['over35', 'combo', 'over25', 'btts'];
+
+export type PairItem = {
   name: string;
   league: string | null;
-  earned: PairOption[]; // everything the match earned (1 to 4)
+  option: PairOption;
+  sum4: bigint; // a1 + a2 + b1 + b2, scaled by 10^9
+  weaker2: bigint; // min(a1 + b2, b1 + a2), scaled by 10^9
 };
 
 export type PairPlan = {
   stored: number;
   unreadable: string[];
   poolCount: number; // matches in the 2+ pool
-  matches: PairMatch[]; // pool matches that earned at least one option
-  noOptionCount: number; // stored matches that earned nothing
-  canBuild: boolean;
-  reason: string | null;
+  items: PairItem[]; // pool matches that earned an option (stored order)
+  noOptionCount: number; // pool matches that earned nothing
 };
 
-export type PairLeg = { matchIndex: number; option: PairOption };
+const MAX_NAME_SHOWN = 60;
+const MAX_LEAGUE_SHOWN = 60;
+const MAX_MESSAGE_CHARS = 3500;
 
-export type PairDeal = {
-  tickets: PairLeg[][];
-  leftovers: PairLeg[];
-  legCount: number; // legs after picking two per match
+// Measured on the TRAINING_ROWS past matches (fitted on the same matches).
+const PAST_BY_OPTION: { [k: string]: { percent: number; matches: number } } = {
+  over35: { percent: 56, matches: 95 },
+  combo: { percent: 64, matches: 25 },
+  over25: { percent: 100, matches: 15 },
+  btts: { percent: 72, matches: 18 },
 };
+
+// ── Exact decimal helper for the display ──────────────────────────────────
+let SCALE = BigInt(1);
+for (let i = 0; i < 9; i++) SCALE = SCALE * BigInt(10);
+const TWO = BigInt(2);
+const HUNDRED = BigInt(100);
+
+function hundredthsText(sumScaled: bigint): string {
+  const h = (sumScaled * HUNDRED) / (TWO * SCALE);
+  const whole = h / HUNDRED;
+  const frac = (h % HUNDRED).toString();
+  return whole.toString() + '.' + (frac.length < 2 ? '0' + frac : frac);
+}
 
 // ── Which options does a pool pick earn? (pure) ───────────────────────────
 export function earnedOptions(pick: ConfidencePick): PairOption[] {
@@ -89,10 +96,18 @@ export function earnedOptions(pick: ConfidencePick): PairOption[] {
   return out;
 }
 
+// The hardest earned option, or null
+export function bestOption(earned: PairOption[]): PairOption | null {
+  for (let i = 0; i < PAIR_PRIORITY.length; i++) {
+    if (earned.indexOf(PAIR_PRIORITY[i]) !== -1) return PAIR_PRIORITY[i];
+  }
+  return null;
+}
+
 // ── The plan ──────────────────────────────────────────────────────────────
 export function planPairs(rows: PairRow[]): PairPlan {
   const conf = planConfidence(rows);
-  const matches: PairMatch[] = [];
+  const items: PairItem[] = [];
   let poolCount = 0;
   let noOption = 0;
 
@@ -100,199 +115,128 @@ export function planPairs(rows: PairRow[]): PairPlan {
     const p = conf.picks[i];
     if (p.kind !== 'over25') continue;
     poolCount++;
-    const earned = earnedOptions(p);
-    if (earned.length === 0) noOption++;
-    else matches.push({ name: p.name, league: p.league, earned: earned });
+    const option = bestOption(earnedOptions(p));
+    if (option === null) noOption++;
+    else items.push({ name: p.name, league: p.league, option: option, sum4: p.sum4, weaker2: p.weaker2 });
   }
 
-  const n = matches.length;
-  const canBuild = n >= PAIR_MIN_PER_TICKET;
   return {
     stored: rows.length,
     unreadable: conf.unreadable,
     poolCount: poolCount,
-    matches: matches,
+    items: items,
     noOptionCount: noOption,
-    canBuild: canBuild,
-    reason: canBuild
-      ? null
-      : 'Only ' + n + ' match' + (n === 1 ? '' : 'es') + ' earned an option. At least ' +
-        PAIR_MIN_PER_TICKET + ' are needed for one ticket.',
   };
 }
 
-// ── Dealing ───────────────────────────────────────────────────────────────
-function shuffle<T>(list: T[], random: () => number): T[] {
-  const a = list.slice();
-  for (let i = a.length - 1; i > 0; i--) {
-    const j = Math.min(i, Math.floor(random() * (i + 1)));
-    const t = a[i];
-    a[i] = a[j];
-    a[j] = t;
-  }
-  return a;
-}
-
-// One random layout. Returns the tickets and how many legs were left.
-function oneLayout(
-  legs: PairOption[][],
-  random: () => number
-): { tickets: PairLeg[][]; left: PairOption[][]; leftCount: number } {
-  const n = legs.length;
-  const left: PairOption[][] = legs.map(function (l) { return l.slice(); });
-  const tickets: PairLeg[][] = [];
-
-  while (true) {
-    const avail: number[] = [];
-    for (let i = 0; i < n; i++) if (left[i].length > 0) avail.push(i);
-    if (avail.length < PAIR_MIN_PER_TICKET) break;
-
-    const maxSize = Math.min(PAIR_MAX_PER_TICKET, avail.length);
-    const size =
-      PAIR_MIN_PER_TICKET +
-      Math.min(
-        maxSize - PAIR_MIN_PER_TICKET,
-        Math.floor(random() * (maxSize - PAIR_MIN_PER_TICKET + 1))
-      );
-    const picked = shuffle(avail, random).slice(0, size);
-    picked.sort(function (x, y) { return x - y; }); // keep stored order
-
-    const ticket: PairLeg[] = [];
-    for (let k = 0; k < picked.length; k++) {
-      const mi = picked[k];
-      const pos = Math.min(left[mi].length - 1, Math.floor(random() * left[mi].length));
-      const option = left[mi].splice(pos, 1)[0];
-      ticket.push({ matchIndex: mi, option: option });
-    }
-    tickets.push(ticket);
-  }
-
-  let leftCount = 0;
-  for (let i = 0; i < n; i++) leftCount += left[i].length;
-  return { tickets: tickets, left: left, leftCount: leftCount };
-}
-
-export function dealPairs(plan: PairPlan, rnd?: () => number): PairDeal {
-  const random = rnd || Math.random;
-
-  // each match keeps at most OPTIONS_PER_MATCH of what it earned, at random
-  const legs: PairOption[][] = plan.matches.map(function (m) {
-    return shuffle(m.earned, random).slice(0, OPTIONS_PER_MATCH);
-  });
-  let legCount = 0;
-  for (let i = 0; i < legs.length; i++) legCount += legs[i].length;
-
-  if (!plan.canBuild) {
-    const all: PairLeg[] = [];
-    for (let i = 0; i < legs.length; i++) {
-      for (let k = 0; k < legs[i].length; k++) all.push({ matchIndex: i, option: legs[i][k] });
-    }
-    return { tickets: [], leftovers: all, legCount: legCount };
-  }
-
-  let best: { tickets: PairLeg[][]; left: PairOption[][]; leftCount: number }[] = [];
-  let bestLeft = -1;
-  for (let t = 0; t < LAYOUT_TRIES; t++) {
-    const r = oneLayout(legs, random);
-    if (bestLeft === -1 || r.leftCount < bestLeft) {
-      best = [r];
-      bestLeft = r.leftCount;
-    } else if (r.leftCount === bestLeft) {
-      best.push(r);
-    }
-  }
-  const chosen = best[Math.min(best.length - 1, Math.floor(random() * best.length))];
-
-  const leftovers: PairLeg[] = [];
-  for (let i = 0; i < chosen.left.length; i++) {
-    for (let k = 0; k < chosen.left[i].length; k++) {
-      leftovers.push({ matchIndex: i, option: chosen.left[i][k] });
-    }
-  }
-  return { tickets: chosen.tickets, leftovers: leftovers, legCount: legCount };
-}
-
-// ── Text ──────────────────────────────────────────────────────────────────
+// ── Output ────────────────────────────────────────────────────────────────
 function shorten(text: string, max: number): string {
   const t = text.trim();
   return t.length <= max ? t : t.slice(0, max - 3).trim() + '...';
 }
 
-export function describePairPlan(plan: PairPlan): string {
-  const lines: string[] = [];
-  lines.push('PAIR TICKETS');
-  lines.push('');
-  lines.push('Stored matches: ' + plan.stored);
-  lines.push('In the 2+ pool (both formulas, both teams 2 or more): ' + plan.poolCount);
-  lines.push('Earned at least one option: ' + plan.matches.length);
-  lines.push('Earned nothing, left out: ' + plan.noOptionCount);
-  if (!plan.canBuild && plan.reason) {
-    lines.push('');
-    lines.push('No tickets can be made. ' + plan.reason);
+function footerText(plan: PairPlan): string {
+  const counts: { [k: string]: number } = {};
+  for (let i = 0; i < plan.items.length; i++) {
+    const o = plan.items[i].option;
+    counts[o] = (counts[o] || 0) + 1;
   }
+  const parts: string[] = [];
+  for (let i = 0; i < PAIR_PRIORITY.length; i++) {
+    const n = counts[PAIR_PRIORITY[i]] || 0;
+    if (n > 0) parts.push(n + ' ' + PAIR_OPTION_LABEL[PAIR_PRIORITY[i]]);
+  }
+
+  const lines: string[] = [];
+  lines.push(
+    plan.items.length + ' of ' + plan.poolCount + ' pool matches have an option' +
+      (parts.length > 0 ? ': ' + parts.join(', ') : '') + '.'
+  );
+  if (plan.noOptionCount > 0) {
+    lines.push(plan.noOptionCount + ' pool match' + (plan.noOptionCount === 1 ? '' : 'es') + ' earned no option and ' + (plan.noOptionCount === 1 ? 'is' : 'are') + ' not listed.');
+  }
+  if (plan.unreadable.length > 0) {
+    lines.push('Could not be read: ' + plan.unreadable.join('; ') + '.');
+  }
+  const hist: string[] = [];
+  for (let i = 0; i < PAIR_PRIORITY.length; i++) {
+    const k = PAIR_PRIORITY[i];
+    hist.push(PAIR_OPTION_LABEL[k] + ' about ' + PAST_BY_OPTION[k].percent + '% (' + PAST_BY_OPTION[k].matches + ' matches)');
+  }
+  lines.push(
+    'In ' + TRAINING_ROWS + ' past matches, options set this way won: ' + hist.join(', ') +
+      '. The cut points were fitted on those same matches, so new matches may do worse. No result is recorded.'
+  );
   return lines.join('\n');
 }
 
-export function formatPairTickets(plan: PairPlan, deal: PairDeal): string[] {
-  const out: string[] = [];
-  const total = deal.tickets.length;
-
-  for (let t = 0; t < total; t++) {
-    const ticket = deal.tickets[t];
-    const lines: string[] = [];
-    lines.push('PAIR TICKET ' + (t + 1) + ' of ' + total + ' (' + ticket.length + ' matches)');
-    lines.push('');
-    for (let k = 0; k < ticket.length; k++) {
-      const m = plan.matches[ticket[k].matchIndex];
-      lines.push((k + 1) + ') ' + shorten(m.name, MAX_NAME_SHOWN));
-      if (m.league) lines.push(shorten(m.league, MAX_LEAGUE_SHOWN));
-      lines.push(PAIR_OPTION_LABEL[ticket[k].option]);
-      lines.push('');
-    }
-    out.push(lines.join('\n').trim());
+// The list, grouped by option (hardest first), highest expected goals first
+// inside a group (BTTS Yes: highest weaker side first). Returns messages of
+// at most about 3,500 characters. The storage is not touched.
+export function formatPairList(plan: PairPlan): string[] {
+  const footer = footerText(plan);
+  if (plan.items.length === 0) {
+    return [
+      'No pool match earned an option.\n\nPool = both formulas give both teams 2 or more (' +
+        plan.poolCount + ' stored).\n\n' + footer,
+    ];
   }
 
-  // summary
-  const counts: { [k: string]: number } = {};
-  let dealt = 0;
-  for (let t = 0; t < total; t++) {
-    for (let k = 0; k < deal.tickets[t].length; k++) {
-      dealt++;
-      const o = deal.tickets[t][k].option;
-      counts[o] = (counts[o] || 0) + 1;
-    }
-  }
-  const summary: string[] = [];
-  summary.push(
-    total + ' ticket' + (total === 1 ? '' : 's') + ' from ' + plan.matches.length +
-      ' matches (' + dealt + ' of ' + deal.legCount + ' legs used).'
-  );
-  const parts: string[] = [];
-  const order = ['over25', 'btts', 'combo', 'over35'];
-  for (let i = 0; i < order.length; i++) {
-    const n = counts[order[i]] || 0;
-    if (n > 0) parts.push(n + ' ' + PAIR_OPTION_LABEL[order[i]]);
-  }
-  if (parts.length > 0) summary.push('In the tickets: ' + parts.join(', ') + '.');
+  const titles: { [k: string]: string } = {
+    over35: 'OVER 3.5 (expected goals 4.0 or more)',
+    combo: 'BTTS YES + OVER 2.5 (expected goals 3.8 or more and weaker side 1.8 or more)',
+    over25: 'OVER 2.5 (expected goals 3.8 or more)',
+    btts: 'BTTS YES (weaker side 1.8 or more)',
+  };
 
-  if (deal.leftovers.length > 0) {
-    const names: string[] = [];
-    for (let i = 0; i < deal.leftovers.length; i++) {
-      const l = deal.leftovers[i];
-      names.push(shorten(plan.matches[l.matchIndex].name, MAX_NAME_SHOWN) + ' (' + PAIR_OPTION_LABEL[l.option] + ')');
+  const blocks: string[] = [];
+  let n = 0;
+  for (let g = 0; g < PAIR_PRIORITY.length; g++) {
+    const option = PAIR_PRIORITY[g];
+    const group: { item: PairItem; idx: number }[] = [];
+    for (let i = 0; i < plan.items.length; i++) {
+      if (plan.items[i].option === option) group.push({ item: plan.items[i], idx: i });
     }
-    summary.push('Not used, fewer than ' + PAIR_MIN_PER_TICKET + ' different matches were left: ' + names.join('; ') + '.');
+    group.sort(function (x, y) {
+      const kx = option === 'btts' ? x.item.weaker2 : x.item.sum4;
+      const ky = option === 'btts' ? y.item.weaker2 : y.item.sum4;
+      if (kx !== ky) return kx < ky ? 1 : -1;
+      return x.idx - y.idx;
+    });
+    for (let k = 0; k < group.length; k++) {
+      n++;
+      const it = group[k].item;
+      const lines: string[] = [];
+      lines.push(n + ') ' + shorten(it.name, MAX_NAME_SHOWN));
+      if (it.league) lines.push(shorten(it.league, MAX_LEAGUE_SHOWN));
+      lines.push(PAIR_OPTION_LABEL[option]);
+      lines.push('Expected goals ' + hundredthsText(it.sum4) + ' · weaker side ' + hundredthsText(it.weaker2));
+      let block = lines.join('\n');
+      if (k === 0) {
+        block = (n === 1 ? 'BEST OPTIONS (pool matches, one option each, hardest earned first)\n\n' : '') + titles[option] + '\n\n' + block;
+      }
+      blocks.push(block);
+    }
   }
-  if (plan.noOptionCount > 0) {
-    summary.push(plan.noOptionCount + ' pool match' + (plan.noOptionCount === 1 ? '' : 'es') + ' earned no option and ' + (plan.noOptionCount === 1 ? 'was' : 'were') + ' left out.');
+
+  const chunks: string[] = [];
+  let current = '';
+  for (let i = 0; i < blocks.length; i++) {
+    const add = (current ? '\n\n' : '') + blocks[i];
+    if (current && current.length + add.length > MAX_MESSAGE_CHARS) {
+      chunks.push(current);
+      current = blocks[i];
+    } else {
+      current += add;
+    }
   }
-  if (plan.unreadable.length > 0) {
-    summary.push('Could not be read: ' + plan.unreadable.join('; ') + '.');
+  if (current) chunks.push(current);
+
+  const last = chunks[chunks.length - 1];
+  if (last.length + 2 + footer.length <= MAX_MESSAGE_CHARS) {
+    chunks[chunks.length - 1] = last + '\n\n' + footer;
+  } else {
+    chunks.push(footer);
   }
-  summary.push('');
-  summary.push('Each match has the options it earned (two at most), and sits in one ticket per option, so one bad result can sink two tickets.');
-  summary.push('The storage was not emptied. Tapping again gives a different random set.');
-  summary.push('The rules were fitted on ' + TRAINING_ROWS + ' past matches. No accuracy is promised and no result is recorded.');
-  out.push(summary.join('\n'));
-  return out;
+  return chunks;
 }
