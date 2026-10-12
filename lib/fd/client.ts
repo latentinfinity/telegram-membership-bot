@@ -59,7 +59,12 @@ export function toISODate(d: Date): string {
 }
 
 // ── Typed helpers ─────────────────────────────────────────────────────────
-export type FdSeason = { id: number; startDate: string; endDate: string };
+export type FdSeason = {
+  id: number;
+  startDate: string;
+  endDate: string;
+  currentMatchday?: number | null;
+};
 export type FdCompetition = {
   id: number;
   name: string;
@@ -110,4 +115,24 @@ export function getTeamFinished(teamId: number, from: string, to: string) {
   return fdGet<FdMatchList>(
     '/teams/' + teamId + '/matches?status=FINISHED&limit=100&dateFrom=' + from + '&dateTo=' + to
   );
+}
+
+// One matchday (game week) of one competition, every status included.
+// season = start year. Used to sync fixtures and to check the previous
+// matchday is finished or postponed.
+export function getMatchday(code: string, seasonYear: string, matchday: number) {
+  return fdGet<FdMatchList>(
+    '/competitions/' + code + '/matches?season=' + seasonYear + '&matchday=' + matchday
+  );
+}
+
+// One match by id (grading). Only act on status FINISHED with both scores.
+export type FdSingleMatch = {
+  id: number;
+  status: string;
+  score?: { fullTime?: { home: number | null; away: number | null } };
+};
+
+export function getMatchById(id: number) {
+  return fdGet<FdSingleMatch>('/matches/' + id);
 }
