@@ -150,6 +150,7 @@ export type NewFixture = {
   fd_match_id: number;
   comp_code: string;
   season_year: string;
+  stage: string;
   matchday: number;
   match_date: string;
   home_id: number;
@@ -178,7 +179,7 @@ export type FixtureRow = NewFixture & {
 };
 
 const FIX_COLS =
-  'fd_match_id,comp_code,season_year,matchday,match_date,home_id,home_name,away_id,away_name,' +
+  'fd_match_id,comp_code,season_year,stage,matchday,match_date,home_id,home_name,away_id,away_name,' +
   'status,skip_reason,hs,hc,asc_,ac,home_tier,away_tier,f1_home,f1_away,f2_home,f2_away,' +
   'predicted_at,real_home,real_away,graded_at';
 
@@ -199,7 +200,12 @@ export async function insertFixtures(rows: NewFixture[]): Promise<R<number>> {
   }
 }
 
-export async function getFixtures(comp: string, season: string, matchday: number): Promise<R<FixtureRow[]>> {
+export async function getFixtures(
+  comp: string,
+  season: string,
+  stage: string,
+  matchday: number
+): Promise<R<FixtureRow[]>> {
   try {
     const d = await db();
     const { data, error } = await d
@@ -207,6 +213,7 @@ export async function getFixtures(comp: string, season: string, matchday: number
       .select(FIX_COLS)
       .eq('comp_code', comp)
       .eq('season_year', season)
+      .eq('stage', stage)
       .eq('matchday', matchday)
       .order('match_date');
     if (error) return dbFail(error.message);
@@ -323,5 +330,62 @@ export async function markVoid(fdMatchId: number, reason: string): Promise<R<boo
     return { ok: true, data: (data || []).length > 0 };
   } catch (e) {
     return fail(e);
+  }
+}
+
+// Which of these matches are already stored, with their date and status.
+export async function getFixtureDates(
+  ids: number[]
+): Promise<R<Map<number, { match_date: string; status: string }>>> {
+  try {
+    const map = new Map<number, { match_date: string; status: string }>();
+    if (ids.length === 0) return { ok: true, data: map };
+    const d = await db();
+    for (let i = 0; i < ids.length; i += 200) {
+      const { data, error } = await d
+        .from('fd_fixtures')
+        .select('fd_match_id,match_date,status')
+        .in('fd_match_id', ids.slice(i, i + 200));
+      if (error) return dbFail(error.message);
+      for (const r of (data || []) as { fd_match_id: number; match_date: string; status: string }[]) {
+        map.set(r.fd_match_id, { match_date: r.match_date, status: r.status });
+      }
+    }
+    return { ok: true, data: map };
+  } catch (e) {
+    return fail(e);
+  }
+}
+
+// A rescheduled match keeps its row (and any prediction); only the date moves.
+export async function updateFixtureDate(fdMatchId: number, matchDateIso: string): Promise<R<boolean>> {
+  try {
+    const d = await db();
+    const { data, error } = await d
+      .from('fd_fixtures')
+      .update({ match_date: matchDateIso })
+      .eq('fd_match_id', fdMatchId)
+      .eq('status', 'pending')
+      .select('fd_match_id');
+    if (error) return dbFail(error.message);
+    return { ok: true, data: (data || []).length > 0 };
+  } catch (e) {
+    return fail(e);
+  }
+}
+
+// ── Run log (read by the future admin monitor) ────────────────────────────
+export async function logRun(
+  step: string,
+  comp: string | null,
+  ok: boolean,
+  seconds: number,
+  detail: unknown
+): Promise<void> {
+  try {
+    const d = await db();
+    await d.from('fd_run_log').insert({ step, comp_code: comp, ok, seconds, detail });
+  } catch {
+    // logging must never break a run
   }
 }
