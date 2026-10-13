@@ -26,3 +26,12 @@ export const SYNC_BUDGET_MS = 30000;
 
 // Predictions made on stale stats are rechecked at least this often.
 export const STALE_REFRESH_HOURS = 3;
+
+// Grading: a match is checked this long after kickoff (free-tier results
+// can lag), then re-checked no more often than every RECHECK_MINUTES.
+export const GRADE_AFTER_HOURS = 6;
+export const RECHECK_MINUTES = 30;
+// Per competition and run: single-match lookups for results older than
+// the 10-day batch range, and the point where a match is given up on.
+export const OLD_LOOKUP_LIMIT = 3;
+export const GIVE_UP_DAYS = 14;

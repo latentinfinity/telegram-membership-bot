@@ -526,3 +526,49 @@ export async function listOverdueUngraded(
     return fail(e);
   }
 }
+
+// ── Grading work lists ────────────────────────────────────────────────────
+export type DueRow = {
+  fd_match_id: number;
+  comp_code: string;
+  match_date: string;
+  result_checked_at: string | null;
+};
+
+// Predicted, not yet graded, kicked off before the cutoff.
+export async function listDueForResults(cutoffIso: string, limit: number): Promise<R<DueRow[]>> {
+  try {
+    const d = await db();
+    const { data, error } = await d
+      .from('fd_fixtures')
+      .select('fd_match_id,comp_code,match_date,result_checked_at')
+      .eq('status', 'pending')
+      .not('predicted_at', 'is', null)
+      .lt('match_date', cutoffIso)
+      .order('match_date')
+      .limit(limit);
+    if (error) return dbFail(error.message);
+    return { ok: true, data: (data || []) as DueRow[] };
+  } catch (e) {
+    return fail(e);
+  }
+}
+
+export async function touchResultChecked(ids: number[]): Promise<R<true>> {
+  try {
+    if (ids.length === 0) return { ok: true, data: true };
+    const d = await db();
+    const now = new Date().toISOString();
+    for (let i = 0; i < ids.length; i += 200) {
+      const { error } = await d
+        .from('fd_fixtures')
+        .update({ result_checked_at: now })
+        .in('fd_match_id', ids.slice(i, i + 200))
+        .eq('status', 'pending');
+      if (error) return dbFail(error.message);
+    }
+    return { ok: true, data: true };
+  } catch (e) {
+    return fail(e);
+  }
+}

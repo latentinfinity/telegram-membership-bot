@@ -1,21 +1,23 @@
 // app/api/fd/run/route.ts
 // The single entry point for the football-data.org automation.
-// /api/fd/run?secret=<DISPATCH_SECRET>&step=stats|sync|predict[&comp=PL,CL][&force=1]
+// /api/fd/run?secret=<DISPATCH_SECRET>&step=tick|stats|sync|predict|grade[&comp=PL,CL][&force=1]
 // Only one run at a time (database lock). Every run is written to fd_run_log.
 
 import { NextResponse } from 'next/server';
 import { FREE_TIER, LOCK_NAME, LOCK_SECONDS } from '../../../../lib/fd/config';
 import { tryLock, unlock } from '../../../../lib/fd/lock';
+import { runGradeStep } from '../../../../lib/fd/steps/grade';
 import { runPredictStep } from '../../../../lib/fd/steps/predict';
 import { runStatsStep } from '../../../../lib/fd/steps/stats';
 import { runSyncStep } from '../../../../lib/fd/steps/sync';
+import { runTick } from '../../../../lib/fd/steps/tick';
 import { logRun } from '../../../../lib/fd/store';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
 
-const VERSION = 'fd-run-3';
-const STEPS = ['stats', 'sync', 'predict'];
+const VERSION = 'fd-run-4';
+const STEPS = ['tick', 'stats', 'sync', 'predict', 'grade'];
 
 export async function GET(req: Request) {
   const url = new URL(req.url);
@@ -50,15 +52,19 @@ export async function GET(req: Request) {
 
   try {
     const result =
-      step === 'sync'
+      step === 'tick'
+        ? await runTick({ comps, force })
+        : step === 'sync'
         ? await runSyncStep({ comps, rotate: !compParam })
         : step === 'predict'
         ? await runPredictStep({ comps })
+        : step === 'grade'
+        ? await runGradeStep({ comps, deadline: Date.now() + 30000 })
         : await runStatsStep({ comps, force });
     out.result = result;
     const seconds = Math.round((Date.now() - t0) / 100) / 10;
     out.seconds = seconds;
-    const idle = result.done === true;
+    const idle = result.done === true || (step === 'tick' && result.activity === false);
     if (!idle) await logRun(step, compParam ? comps.join(',') : null, result.ok !== false, seconds, result);
     return NextResponse.json(out);
   } catch (e) {

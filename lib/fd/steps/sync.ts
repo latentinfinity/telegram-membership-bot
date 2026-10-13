@@ -20,7 +20,7 @@ import {
 } from '../store';
 import type { CompetitionRow, NewFixture } from '../store';
 
-export type SyncOptions = { comps: string[]; rotate: boolean };
+export type SyncOptions = { comps: string[]; rotate: boolean; deadline?: number };
 
 const DAY = 86400000;
 
@@ -144,7 +144,7 @@ export async function runSyncStep(opts: SyncOptions): Promise<Record<string, unk
 
   const results: Record<string, unknown>[] = [];
   for (const row of active) {
-    if (Date.now() - t0 > SYNC_BUDGET_MS) break;
+    if (Date.now() > (opts.deadline ?? t0 + SYNC_BUDGET_MS)) break;
     const res = await syncOne(row);
     results.push(res);
     if (res.ok !== false) await markSyncChecked(row.code);
