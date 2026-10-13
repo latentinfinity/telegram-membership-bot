@@ -29,13 +29,16 @@ export type CompetitionRow = {
   season_end: string;
   in_season: boolean;
   stats_synced_at: string | null;
+  sync_checked_at: string | null;
   updated_at: string;
 };
 
-const COMP_COLS = 'code,name,comp_type,season_year,season_start,season_end,in_season,stats_synced_at,updated_at';
+const COMP_COLS = 'code,name,comp_type,season_year,season_start,season_end,in_season,stats_synced_at,sync_checked_at,updated_at';
 
 export async function upsertCompetition(
-  row: Omit<CompetitionRow, 'stats_synced_at' | 'updated_at'> & { stats_synced_at?: string | null }
+  row: Omit<CompetitionRow, 'stats_synced_at' | 'sync_checked_at' | 'updated_at'> & {
+    stats_synced_at?: string | null;
+  }
 ): Promise<R<true>> {
   try {
     const d = await db();
@@ -78,6 +81,21 @@ export async function markStatsSynced(code: string): Promise<R<true>> {
     const { error } = await d
       .from('fd_competitions')
       .update({ stats_synced_at: now, updated_at: now })
+      .eq('code', code);
+    if (error) return dbFail(error.message);
+    return { ok: true, data: true };
+  } catch (e) {
+    return fail(e);
+  }
+}
+
+// The sync step visits the competition that was checked longest ago.
+export async function markSyncChecked(code: string): Promise<R<true>> {
+  try {
+    const d = await db();
+    const { error } = await d
+      .from('fd_competitions')
+      .update({ sync_checked_at: new Date().toISOString() })
       .eq('code', code);
     if (error) return dbFail(error.message);
     return { ok: true, data: true };

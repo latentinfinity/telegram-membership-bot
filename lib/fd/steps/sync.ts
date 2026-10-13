@@ -14,6 +14,7 @@ import {
   getTeamStats,
   insertFixtures,
   listCompetitions,
+  markSyncChecked,
   markVoid,
   updateFixtureDate,
 } from '../store';
@@ -131,15 +132,22 @@ export async function runSyncStep(opts: SyncOptions): Promise<Record<string, unk
 
   let active = list.data.filter((r) => opts.comps.indexOf(r.code) !== -1 && r.in_season);
   const skipped = opts.comps.filter((c) => !active.some((r) => r.code === c));
-  if (opts.rotate && active.length > 1) {
-    const start = Math.floor(t0 / 120000) % active.length;
-    active = active.slice(start).concat(active.slice(0, start));
+  if (opts.rotate) {
+    // Longest-unchecked first (never checked = first), so every competition
+    // is reached no matter when or how often this is called.
+    active = active.slice().sort((a, b) => {
+      const x = a.sync_checked_at ? Date.parse(a.sync_checked_at) : 0;
+      const y = b.sync_checked_at ? Date.parse(b.sync_checked_at) : 0;
+      return x - y;
+    });
   }
 
   const results: Record<string, unknown>[] = [];
   for (const row of active) {
     if (Date.now() - t0 > SYNC_BUDGET_MS) break;
-    results.push(await syncOne(row));
+    const res = await syncOne(row);
+    results.push(res);
+    if (res.ok !== false) await markSyncChecked(row.code);
   }
   return {
     ok: true,
