@@ -32,7 +32,10 @@ async function syncOne(row: CompetitionRow): Promise<Record<string, unknown>> {
   const win = ((await fdGet<FdMatchList>('/competitions/' + row.code + '/matches?dateFrom=' + from + '&dateTo=' + to))
     .data.matches || []) as MdMatch[];
   out.window_matches = win.length;
-  if (win.length === 0) return out;
+  if (win.length === 0) {
+    out.note = 'no matches in the window';
+    return out;
+  }
 
   const known = await getFixtureDates(win.map((m) => m.id));
   if (!known.ok) return { ...out, ok: false, error: known.error };
@@ -66,7 +69,14 @@ async function syncOne(row: CompetitionRow): Promise<Record<string, unknown>> {
       opens_after: p.opensAfter,
     }));
   }
-  if (ready.length === 0) return out;
+  if (ready.length === 0) {
+    if (waiting.length === 0) {
+      const groupsInWindow = new Set(win.map((m) => stageOf(m) + '|' + matchdayOf(m))).size;
+      out.note =
+        'nothing new to store: ' + groupsInWindow + ' group(s) in the window, all already stored or already played';
+    }
+    return out;
+  }
 
   const g = ready[0];
   out.groups_ready = ready.length;
