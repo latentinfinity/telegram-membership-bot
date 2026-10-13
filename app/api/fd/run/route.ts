@@ -1,11 +1,12 @@
 // app/api/fd/run/route.ts
 // The single entry point for the football-data.org automation.
-// /api/fd/run?secret=<DISPATCH_SECRET>&step=stats|sync[&comp=PL,CL][&force=1]
+// /api/fd/run?secret=<DISPATCH_SECRET>&step=stats|sync|predict[&comp=PL,CL][&force=1]
 // Only one run at a time (database lock). Every run is written to fd_run_log.
 
 import { NextResponse } from 'next/server';
 import { FREE_TIER, LOCK_NAME, LOCK_SECONDS } from '../../../../lib/fd/config';
 import { tryLock, unlock } from '../../../../lib/fd/lock';
+import { runPredictStep } from '../../../../lib/fd/steps/predict';
 import { runStatsStep } from '../../../../lib/fd/steps/stats';
 import { runSyncStep } from '../../../../lib/fd/steps/sync';
 import { logRun } from '../../../../lib/fd/store';
@@ -13,8 +14,8 @@ import { logRun } from '../../../../lib/fd/store';
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
 
-const VERSION = 'fd-run-2';
-const STEPS = ['stats', 'sync'];
+const VERSION = 'fd-run-3';
+const STEPS = ['stats', 'sync', 'predict'];
 
 export async function GET(req: Request) {
   const url = new URL(req.url);
@@ -51,6 +52,8 @@ export async function GET(req: Request) {
     const result =
       step === 'sync'
         ? await runSyncStep({ comps, rotate: !compParam })
+        : step === 'predict'
+        ? await runPredictStep({ comps })
         : await runStatsStep({ comps, force });
     out.result = result;
     const seconds = Math.round((Date.now() - t0) / 100) / 10;

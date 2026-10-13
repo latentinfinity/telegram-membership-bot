@@ -7,12 +7,13 @@
 // Out-of-season competitions cost one call and are marked in_season = false.
 
 import { getCompetition, getFinishedSeason, getStandings, toISODate } from '../client';
-import { COOLDOWN_MINUTES, DEFAULT_MAX_AGE_HOURS, NO_PREV } from '../config';
+import { COOLDOWN_MINUTES, DEFAULT_MAX_AGE_HOURS, NO_PREV, STALE_REFRESH_HOURS } from '../config';
 import { totalsByTeam } from '../stats';
 import type { FdMatch, TeamTotals } from '../stats';
 import {
   getTeamStats,
   listCompetitions,
+  listPredictable,
   markStatsSynced,
   saveTeamStats,
   upsertCompetition,
@@ -134,9 +135,28 @@ async function findWork(opts: StatsOptions): Promise<{ work: Work[]; error?: str
   const now = Date.now();
   const work: Work[] = [];
 
+  // Stats must be refreshed AFTER new fixtures were stored (so the previous
+  // matchday is in the totals), and every few hours while a prediction
+  // still carries a stale note.
+  const mustBeNewerThan = new Map<string, number>();
+  const waiting = await listPredictable(300);
+  if (waiting.ok) {
+    for (const f of waiting.data) {
+      const need =
+        f.predicted_at === null ? Date.parse(f.created_at) : now - STALE_REFRESH_HOURS * 3600000;
+      const have = mustBeNewerThan.get(f.comp_code);
+      if (have === undefined || need > have) mustBeNewerThan.set(f.comp_code, need);
+    }
+  }
+
   for (const code of opts.comps) {
     const row = byCode.get(code) || null;
-    const ageStale = !row || !row.stats_synced_at || now - Date.parse(row.stats_synced_at) > maxAge;
+    const newer = mustBeNewerThan.get(code);
+    const ageStale =
+      !row ||
+      !row.stats_synced_at ||
+      now - Date.parse(row.stats_synced_at) > maxAge ||
+      (newer !== undefined && Date.parse(row.stats_synced_at) < newer);
     if (!opts.force && failedRecently(row, now)) continue;
     if (opts.force || ageStale) {
       work.push({ code, phase: 'current', row });

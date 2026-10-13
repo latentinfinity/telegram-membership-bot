@@ -234,6 +234,7 @@ export type PredictionInput = {
   f1_away: number;
   f2_home: number;
   f2_away: number;
+  stale_note: string | null;
 };
 
 // Freezes a prediction. Only updates a fixture that has none yet.
@@ -243,7 +244,7 @@ export async function savePrediction(fdMatchId: number, p: PredictionInput): Pro
     const d = await db();
     const { data, error } = await d
       .from('fd_fixtures')
-      .update({ ...p, predicted_at: new Date().toISOString() })
+      .update({ ...p, skip_reason: null, predicted_at: new Date().toISOString() })
       .eq('fd_match_id', fdMatchId)
       .eq('status', 'pending')
       .is('predicted_at', null)
@@ -387,5 +388,123 @@ export async function logRun(
     await d.from('fd_run_log').insert({ step, comp_code: comp, ok, seconds, detail });
   } catch {
     // logging must never break a run
+  }
+}
+
+// ── Prediction work lists ─────────────────────────────────────────────────
+export type PredictableRow = {
+  fd_match_id: number;
+  comp_code: string;
+  season_year: string;
+  stage: string;
+  matchday: number;
+  match_date: string;
+  home_id: number;
+  home_name: string;
+  away_id: number;
+  away_name: string;
+  predicted_at: string | null;
+  stale_note: string | null;
+  created_at: string;
+  hs: number | null;
+  hc: number | null;
+  asc_: number | null;
+  ac: number | null;
+  f1_home: number | null;
+  f1_away: number | null;
+  f2_home: number | null;
+  f2_away: number | null;
+};
+
+const PRED_COLS =
+  'fd_match_id,comp_code,season_year,stage,matchday,match_date,home_id,home_name,away_id,away_name,' +
+  'predicted_at,stale_note,created_at,hs,hc,asc_,ac,f1_home,f1_away,f2_home,f2_away';
+
+// Not started, not posted, and either never predicted or predicted on
+// stale stats (those are refreshed until they are posted).
+export async function listPredictable(limit: number): Promise<R<PredictableRow[]>> {
+  try {
+    const d = await db();
+    const { data, error } = await d
+      .from('fd_fixtures')
+      .select(PRED_COLS)
+      .eq('status', 'pending')
+      .is('posted_at', null)
+      .gt('match_date', new Date().toISOString())
+      .or('predicted_at.is.null,stale_note.not.is.null')
+      .order('match_date')
+      .limit(limit);
+    if (error) return dbFail(error.message);
+    return { ok: true, data: (data || []) as unknown as PredictableRow[] };
+  } catch (e) {
+    return fail(e);
+  }
+}
+
+// Replaces a prediction that was made on stale stats. Never touches a
+// posted, started, graded or void fixture.
+export async function refreshPrediction(fdMatchId: number, p: PredictionInput): Promise<R<boolean>> {
+  try {
+    const d = await db();
+    const { data, error } = await d
+      .from('fd_fixtures')
+      .update({ ...p, predicted_at: new Date().toISOString() })
+      .eq('fd_match_id', fdMatchId)
+      .eq('status', 'pending')
+      .is('posted_at', null)
+      .not('predicted_at', 'is', null)
+      .gt('match_date', new Date().toISOString())
+      .select('fd_match_id');
+    if (error) return dbFail(error.message);
+    return { ok: true, data: (data || []).length > 0 };
+  } catch (e) {
+    return fail(e);
+  }
+}
+
+// A match that cannot be predicted keeps its row and the reason (status
+// stays pending, so it is retried every run and visible to the admin).
+export async function setSkipReason(fdMatchId: number, reason: string): Promise<R<boolean>> {
+  try {
+    const d = await db();
+    const { data, error } = await d
+      .from('fd_fixtures')
+      .update({ skip_reason: reason.slice(0, 200) })
+      .eq('fd_match_id', fdMatchId)
+      .eq('status', 'pending')
+      .is('predicted_at', null)
+      .select('fd_match_id');
+    if (error) return dbFail(error.message);
+    return { ok: true, data: (data || []).length > 0 };
+  } catch (e) {
+    return fail(e);
+  }
+}
+
+// Stored matches that kicked off before the cutoff and are still not
+// resolved by the API.
+export async function listOverdueUngraded(
+  comp: string,
+  cutoffIso: string
+): Promise<R<{ fd_match_id: number; home_id: number; away_id: number; home_name: string; away_name: string; match_date: string }[]>> {
+  try {
+    const d = await db();
+    const { data, error } = await d
+      .from('fd_fixtures')
+      .select('fd_match_id,home_id,away_id,home_name,away_name,match_date')
+      .eq('comp_code', comp)
+      .eq('status', 'pending')
+      .lt('match_date', cutoffIso)
+      .limit(100);
+    if (error) return dbFail(error.message);
+    return {
+      ok: true,
+      data: (data || []) as {
+        fd_match_id: number; home_id: number; away_id: number;
+        home_name: string; away_name: string; match_date: string;
+      }[],
+    };
+  } catch (e) {
+    return fail(e);
   }
 }

@@ -23,3 +23,6 @@ export const LOOKAHEAD_DAYS = 5;
 
 // The sync step stops starting new competitions after this many ms.
 export const SYNC_BUDGET_MS = 30000;
+
+// Predictions made on stale stats are rechecked at least this often.
+export const STALE_REFRESH_HOURS = 3;
