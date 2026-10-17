@@ -17,7 +17,8 @@ export type Skipped = { id: number; reason: string };
 
 export const MODERATE = 50;
 export const HIGH = 65;
-// Team Over 0.5 list: High confidence only (recalculated at one goal)
+// Team Over 0.5 list: confidence of 80 or more only (recalculated at one goal)
+export const O05_MIN = 80;
 
 export function buildLists(fixtures: FixtureIn[]): { lists: Lists; skipped: Skipped[] } {
   const L: Lists = {
@@ -37,7 +38,7 @@ export function buildLists(fixtures: FixtureIn[]): { lists: Lists; skipped: Skip
 
     const inO15 = (v: { goals: number; lam: number }) => v.goals >= 2 && pctAtLeast(2, v.lam) >= MODERATE;
     const inO05 = (v: { goals: number; lam: number }) =>
-      !inO15(v) && v.goals >= 1 && pctAtLeast(1, v.lam) >= HIGH;
+      !inO15(v) && v.goals >= 1 && pctAtLeast(1, v.lam) >= O05_MIN;
     const bttsTeam = (v: { goals: number; lam: number }) =>
       inO15(v) || (v.goals === 1 && pctAtLeast(1, v.lam) >= HIGH);
 
