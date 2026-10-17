@@ -8,26 +8,28 @@ import { formatFixtures, nigeriaParts, dayWindow, weekWindow } from '../fixtures
 import type { FxRow } from '../fixturesPost';
 
 export type Settings = {
-  enabled: boolean;sendChannel: boolean;sendGroup: boolean;
-  weekDay: number;weekTime: string;todayTime: string;predTime: string;footer: string;
+  enabled: boolean; sendChannel: boolean; sendGroup: boolean;
+  weekDay: number; weekTime: string; todayTime: string; predTime: string; footer: string;
 };
 export type FixtureRow = FixtureIn;
 export type Claim = 'claimed' | 'done' | 'busy' | 'gaveup';
-export type SendResult = { ok: true;messageId: number } | { ok: false;error: string };
-export type Sender = (chatId: string, text: string) => Promise < SendResult > ;
+export type SendResult = { ok: true; messageId: number } | { ok: false; error: string };
+export type Sender = (chatId: string, text: string) => Promise<SendResult>;
 
 export interface PostStore {
-  settings(): Promise < Settings | null > ;
-  channelId(): Promise < string | null > ;
+  settings(): Promise<Settings | null>;
+  channelId(): Promise<string | null>;
   groupId(): string | null;
-  fixtures(startIso: string, endIso: string, predictedOnly: boolean): Promise < FixtureRow[] > ;
-  claim(key: string, kind: string, dest: string): Promise < Claim > ;
-  finish(key: string, status: 'sent' | 'failed', ids: number[], error: string | null): Promise < void > ;
-  markPosted(ids: number[]): Promise < void > ;
+  fixtures(startIso: string, endIso: string, predictedOnly: boolean): Promise<FixtureRow[]>;
+  claim(key: string, kind: string, dest: string): Promise<Claim>;
+  finish(key: string, status: 'sent' | 'failed', ids: number[], error: string | null): Promise<void>;
+  markPosted(ids: number[]): Promise<void>;
+  // optional: which of these keys are already sent (lets the step skip heavy queries)
+  doneKeys?(keys: string[]): Promise<Set<string>>;
 }
 
 export type PostResult = {
-  ok: boolean;enabled: boolean;sent: string[];failed: string[];skipped: string[];note ? : string;
+  ok: boolean; enabled: boolean; sent: string[]; failed: string[]; skipped: string[]; note?: string;
 };
 
 const MAX_ATTEMPTS = 3;
@@ -40,7 +42,7 @@ function minutesOf(hhmm: string): number {
 
 export async function runPost(
   store: PostStore, send: Sender, nowMs: number, deadlineMs: number, pauseMs = 300,
-): Promise < PostResult > {
+): Promise<PostResult> {
   const res: PostResult = { ok: true, enabled: false, sent: [], failed: [], skipped: [] };
   const st = await store.settings();
   if (!st || !st.enabled) { res.note = 'posting is switched off'; return res; }
@@ -49,9 +51,9 @@ export async function runPost(
   const nig = nigeriaParts(nowIso);
   const channel = st.sendChannel ? await store.channelId() : null;
   const group = st.sendGroup ? store.groupId() : null;
-  
+
   // one post: claim, send every message in order, record the result
-  const deliver = async (key: string, kind: string, chatId: string, messages: string[]): Promise < boolean > => {
+  const deliver = async (key: string, kind: string, chatId: string, messages: string[]): Promise<boolean> => {
     if (Date.now() >= deadlineMs) { res.skipped.push(`${key}: out of time, next run`); return false; }
     const c = await store.claim(key, kind, chatId);
     if (c !== 'claimed') { if (c !== 'done') res.skipped.push(`${key}: ${c}`); return false; }
@@ -70,10 +72,10 @@ export async function runPost(
     res.sent.push(key);
     return true;
   };
-  
+
   const future = (r: { matchDate: string }) => Date.parse(r.matchDate) > nowMs;
   const toFx = (r: FixtureRow): FxRow => ({ id: r.id, comp: r.comp, compName: r.compName, matchDate: r.matchDate, home: r.home, away: r.away });
-  
+
   // 1. fixtures for the week (one post per league, once per week)
   if (channel) {
     const w = weekWindow(nig.date);
@@ -86,22 +88,28 @@ export async function runPost(
         await deliver(`fxweek:${p.comp}:${monday}`, 'fixtures_week', channel, p.messages);
     }
   }
-  
+
   // 2. fixtures for today (one post per league, once per day)
   if (channel && nig.hhmm >= st.todayTime) {
     const w = dayWindow(nig.date);
     const rows = await store.fixtures(w.startIso, w.endIso, false);
-    const byComp: Record < string, FixtureRow[] > = {};
-    for (const r of rows)(byComp[r.comp] = byComp[r.comp] || []).push(r);
+    const byComp: Record<string, FixtureRow[]> = {};
+    for (const r of rows) (byComp[r.comp] = byComp[r.comp] || []).push(r);
     const live = rows.filter((r) => byComp[r.comp].some(future));
     for (const p of formatFixtures(live.map(toFx), 'today', nig.date))
       await deliver(`fxday:${p.comp}:${nig.date}`, 'fixtures_today', channel, p.messages);
   }
-  
+
   // 3. predictions (normal to the channel, premium to the paid group), once per day
   if ((channel || group) && nig.hhmm >= st.predTime) {
     const w = dayWindow(nig.date);
-    const rows = (await store.fixtures(w.startIso, w.endIso, true)).filter(future);
+    const need: string[] = [];
+    if (channel) need.push(`pred:normal:${nig.date}`);
+    if (group) need.push(`pred:premium:${nig.date}`);
+    const done = store.doneKeys ? await store.doneKeys(need) : new Set<string>();
+    const rows = need.every((k) => done.has(k))
+      ? []
+      : (await store.fixtures(w.startIso, w.endIso, true)).filter(future);
     if (rows.length > 0) {
       const { lists } = buildLists(rows);
       const withFooter = (m: string[]): string[] => {
@@ -130,11 +138,10 @@ export const telegramSender: Sender = async (chatId, text) => {
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
       const r = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
+        method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ chat_id: chatId, text, disable_web_page_preview: true }),
       });
-      const j = (await r.json()) as { ok: boolean;result ? : { message_id: number };description ? : string;parameters ? : { retry_after ? : number } };
+      const j = (await r.json()) as { ok: boolean; result?: { message_id: number }; description?: string; parameters?: { retry_after?: number } };
       if (j.ok && j.result) return { ok: true, messageId: j.result.message_id };
       last = j.description || `HTTP ${r.status}`;
       if (r.status === 429) { await sleep(Math.min(10, j.parameters?.retry_after || 3) * 1000); continue; }
@@ -150,70 +157,56 @@ export const telegramSender: Sender = async (chatId, text) => {
 
 export function supabasePostStore(): PostStore {
   const db = createAdminClient();
-  const names = async (codes: string[]): Promise < Record < string, string >> => {
-    const out: Record < string, string > = {};
+  const names = async (codes: string[]): Promise<Record<string, string>> => {
+    const out: Record<string, string> = {};
     if (codes.length === 0) return out;
     const c = await db.from('fd_competitions').select('code, name').in('code', codes);
-    for (const r of (c.data || []) as { code: string;name: string } []) out[r.code] = r.name;
+    for (const r of (c.data || []) as { code: string; name: string }[]) out[r.code] = r.name;
     return out;
   };
   return {
     async settings() {
       const r = await db.from('fd_post_settings').select('*').eq('id', 1).maybeSingle();
-      const d = r.data as Record < string,
-        unknown > | null;
+      const d = r.data as Record<string, unknown> | null;
       if (r.error || !d) return null;
       return {
-        enabled: d.enabled === true,
-        sendChannel: d.send_channel === true,
-        sendGroup: d.send_group === true,
-        weekDay: Number(d.week_day) || 1,
-        weekTime: String(d.week_time),
-        todayTime: String(d.today_time),
-        predTime: String(d.pred_time),
-        footer: String(d.footer || ''),
+        enabled: d.enabled === true, sendChannel: d.send_channel === true, sendGroup: d.send_group === true,
+        weekDay: Number(d.week_day) || 1, weekTime: String(d.week_time), todayTime: String(d.today_time),
+        predTime: String(d.pred_time), footer: String(d.footer || ''),
       };
     },
     async channelId() {
       const r = await db.from('channel_config').select('channel_id').limit(1).maybeSingle();
-      const v = (r.data as { channel_id ? : unknown } | null)?.channel_id;
+      const v = (r.data as { channel_id?: unknown } | null)?.channel_id;
       return v === null || v === undefined ? null : String(v);
     },
     groupId() { return process.env.TELEGRAM_GROUP_ID || null; },
     async fixtures(startIso, endIso, predictedOnly) {
       let q = db.from('fd_fixtures')
-        .select('fd_match_id, comp_code, stage, match_date, home_name, away_name, hs, hc, asc_, ac, f1_home, f1_away, f2_home, f2_away')
+        .select(predictedOnly
+          ? 'fd_match_id, comp_code, stage, match_date, home_name, away_name, hs, hc, asc_, ac, f1_home, f1_away, f2_home, f2_away'
+          : 'fd_match_id, comp_code, stage, match_date, home_name, away_name')
         .gte('match_date', startIso).lt('match_date', endIso)
         .order('match_date', { ascending: true }).limit(1000);
       q = predictedOnly ? q.eq('status', 'pending').not('predicted_at', 'is', null) : q.in('status', ['pending', 'graded']);
       const r = await q;
       if (r.error) throw new Error(r.error.message);
-      const rows = (r.data || []) as Record < string,
-        unknown > [];
+      const rows = (r.data || []) as Record<string, unknown>[];
       const nm = await names(Array.from(new Set(rows.map((x) => String(x.comp_code)))));
       return rows.map((x) => ({
-        id: Number(x.fd_match_id),
-        comp: String(x.comp_code),
-        compName: nm[String(x.comp_code)] || String(x.comp_code),
-        stage: String(x.stage || ''),
-        matchDate: String(x.match_date),
-        home: String(x.home_name),
-        away: String(x.away_name),
-        hs: x.hs as number | string | null,
-        hc: x.hc as number | string | null,
-        asc: x.asc_ as number | string | null,
-        ac: x.ac as number | string | null,
-        f1h: x.f1_home as number | null,
-        f1a: x.f1_away as number | null,
-        f2h: x.f2_home as number | null,
-        f2a: x.f2_away as number | null,
+        id: Number(x.fd_match_id), comp: String(x.comp_code), compName: nm[String(x.comp_code)] || String(x.comp_code),
+        stage: String(x.stage || ''), matchDate: String(x.match_date), home: String(x.home_name), away: String(x.away_name),
+        hs: x.hs as number | string | null, hc: x.hc as number | string | null,
+        asc: x.asc_ as number | string | null, ac: x.ac as number | string | null,
+        f1h: x.f1_home as number | null, f1a: x.f1_away as number | null,
+        f2h: x.f2_home as number | null, f2a: x.f2_away as number | null,
       }));
     },
     async claim(key, kind, dest) {
       const ins = await db.from('fd_post_log').insert({ post_key: key, kind, destination: dest, status: 'sending', attempts: 1 });
       if (!ins.error) return 'claimed';
       const cur = await db.from('fd_post_log').select('status, attempts, updated_at').eq('post_key', key).maybeSingle();
-      const row = cur.data as { status: string;attempts: number;updated_at: string } | null;
+      const row = cur.data as { status: string; attempts: number; updated_at: string } | null;
       if (!row) return 'busy';
       if (row.status === 'sent') return 'done';
       if (row.status === 'sending') {
@@ -228,14 +221,29 @@ export function supabasePostStore(): PostStore {
       return up.data && (up.data as unknown[]).length > 0 ? 'claimed' : 'busy';
     },
     async finish(key, status, ids, error) {
-      const patch: Record < string, unknown > = { status, message_ids: ids, error, updated_at: new Date().toISOString() };
+      const patch: Record<string, unknown> = { status, message_ids: ids, error, updated_at: new Date().toISOString() };
       if (status === 'sent') patch.sent_at = new Date().toISOString();
       if (status === 'failed' && ids.length > 0) patch.attempts = 99; // partly sent: never auto-retry
       await db.from('fd_post_log').update(patch).eq('post_key', key);
+    },
+    async doneKeys(keys) {
+      if (keys.length === 0) return new Set<string>();
+      const r = await db.from('fd_post_log').select('post_key').in('post_key', keys).eq('status', 'sent');
+      return new Set(((r.data || []) as { post_key: string }[]).map((x) => x.post_key));
     },
     async markPosted(ids) {
       if (ids.length === 0) return;
       await db.from('fd_fixtures').update({ posted_at: new Date().toISOString() }).in('fd_match_id', ids).is('posted_at', null);
     },
   };
+}
+
+// Entry point used by tick. Never throws: a posting problem must not break the data pipeline.
+export async function runPostStep(opts: { deadline: number }): Promise<Record<string, unknown>> {
+  try {
+    const r = await runPost(supabasePostStore(), telegramSender, Date.now(), opts.deadline);
+    return { ...r };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : 'post step failed' };
+  }
 }
