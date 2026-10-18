@@ -39,11 +39,13 @@ export function buildLists(fixtures: FixtureIn[]): { lists: Lists; skipped: Skip
     const inO15 = (v: { goals: number; lam: number }) => v.goals >= 2 && pctAtLeast(2, v.lam) >= MODERATE;
     const inO05 = (v: { goals: number; lam: number }) =>
       !inO15(v) && v.goals >= 1 && pctAtLeast(1, v.lam) >= O05_MIN;
-    const bttsTeam = (v: { goals: number; lam: number }) =>
-      inO15(v) || (v.goals === 1 && pctAtLeast(1, v.lam) >= HIGH);
+    // Team Over 2.5: line O2.5 or higher and Moderate or better at 3 goals
+    const inO25 = (v: { goals: number; lam: number }) => v.goals >= 3 && pctAtLeast(3, v.lam) >= MODERATE;
+    const bttsTeam = (v: { goals: number; lam: number }) => inO15(v) || inO05(v);
 
-    const o25 = H.goals >= 2 && A.goals >= 2;
-    const o35 = (H.goals >= 3 && A.goals >= 2) || (A.goals >= 3 && H.goals >= 2);
+    // every Over / BTTS pick needs each team to qualify at its line, with confidence
+    const o25 = inO15(H) && inO15(A);
+    const o35 = (inO25(H) && inO15(A)) || (inO25(A) && inO15(H));
     const bt = bttsTeam(H) && bttsTeam(A);
     if (o25) L.over25.push({ fixture: f });
     if (o35) L.over35.push({ fixture: f });
