@@ -17,7 +17,7 @@ export type Skipped = { id: number; reason: string };
 
 export const MODERATE = 50;
 export const HIGH = 65;
-// Team Over 0.5 list: confidence of 80 or more only (recalculated at one goal)
+// Team Over 0.5 list: own line O0.5 and confidence of 80 or more
 export const O05_MIN = 80;
 
 export function buildLists(fixtures: FixtureIn[]): { lists: Lists; skipped: Skipped[] } {
@@ -36,24 +36,26 @@ export function buildLists(fixtures: FixtureIn[]): { lists: Lists; skipped: Skip
     const A = teamView(as_, hc); // away: own scored, home conceded
     const hasScores = f.f1h !== null && f.f1a !== null && f.f2h !== null && f.f2a !== null;
 
-    const inO15 = (v: { goals: number; lam: number }) => v.goals >= 2 && pctAtLeast(2, v.lam) >= MODERATE;
-    const inO05 = (v: { goals: number; lam: number }) =>
-      !inO15(v) && v.goals >= 1 && pctAtLeast(1, v.lam) >= O05_MIN;
-    // Team Over 2.5: line O2.5 or higher and Moderate or better at 3 goals
-    const inO25 = (v: { goals: number; lam: number }) => v.goals >= 3 && pctAtLeast(3, v.lam) >= MODERATE;
-    const bttsTeam = (v: { goals: number; lam: number }) => inO15(v) || inO05(v);
+    type V = { goals: number; lam: number };
+    // Team Over 1.5 list: line O1.5 or higher and High (65+) at 2 goals
+    const teamHigh15 = (v: V) => v.goals >= 2 && pctAtLeast(2, v.lam) >= HIGH;
+    // Moderate (50+) at 2 goals: used by Over 2.5, Over 3.5 and BTTS Yes
+    const mod15 = (v: V) => v.goals >= 2 && pctAtLeast(2, v.lam) >= MODERATE;
+    // Moderate (50+) at 3 goals, line O2.5 or higher: used by Over 3.5
+    const mod25 = (v: V) => v.goals >= 3 && pctAtLeast(3, v.lam) >= MODERATE;
+    // Team Over 0.5 list: the team's OWN line is O0.5 and 80+ at 1 goal. No other team ever lands here.
+    const team05 = (v: V) => v.goals === 1 && pctAtLeast(1, v.lam) >= O05_MIN;
 
-    // every Over / BTTS pick needs each team to qualify at its line, with confidence
-    const o25 = inO15(H) && inO15(A);
-    const o35 = (inO25(H) && inO15(A)) || (inO25(A) && inO15(H));
-    const bt = bttsTeam(H) && bttsTeam(A);
+    const o25 = mod15(H) && mod15(A);
+    const o35 = (mod25(H) && mod15(A)) || (mod25(A) && mod15(H));
+    const bt = (mod15(H) || team05(H)) && (mod15(A) || team05(A));
     if (o25) L.over25.push({ fixture: f });
     if (o35) L.over35.push({ fixture: f });
     if (bt) L.btts.push({ fixture: f });
 
     const sides: ['home' | 'away', typeof H][] = [['home', H], ['away', A]];
     for (const [side, v] of sides) {
-      const n15 = inO15(v), n05 = inO05(v);
+      const n15 = teamHigh15(v), n05 = team05(v);
       if (n15) L.teamO15.push({ fixture: f, team: side });
       else if (n05) L.teamO05.push({ fixture: f, team: side });
       if (hasScores && (n15 || n05)) {
