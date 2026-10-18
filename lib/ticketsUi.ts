@@ -8,9 +8,11 @@
 //   a_tk_create      Create Tickets (confirm), a_tk_create_yes (do it)
 //   a_tk_pair        Best Options: the pool matches with one option each (a list, no tickets)
 //   a_tk_roll        Roll Over Matches: Over 2.5 then Over 1.5 list outside the pool
+//   a_tk_to          Team Over Lists: the new rules on the stored matches (private, read only)
 //   a_tk_view        View Stored Matches
 //   a_tk_conf        Confidence lists
 //   a_tk_clear       Clear Matches (confirm), a_tk_clear_yes (do it)
+//   a_tk_ap*         Auto Posting menu (switches and latest posts), handled in lib/fd/postAdmin.ts
 // ═══════════════════════════════════════════════════════════════
 
 import { sendMessage } from '@/lib/telegram';
@@ -32,6 +34,8 @@ import type { RuleRow } from '@/lib/ruleTickets';
 import { planConfidence, formatConfidence } from '@/lib/confidence';
 import { planPairs, formatPairList } from '@/lib/pairTickets';
 import { planRollOver, formatRollOver } from '@/lib/rollOver';
+import { runManual } from '@/lib/fd/manual';
+import { handlePostAdmin } from '@/lib/fd/postAdmin';
 import {
   listStored,
   countStored,
@@ -54,10 +58,12 @@ function tkMenu(storedCount: number): InlineKeyboard {
     ]);
     rows.push([{ text: '🧩 Best Options', callback_data: 'a_tk_pair' }]);
     rows.push([{ text: '📈 Roll Over Matches', callback_data: 'a_tk_roll' }]);
+    rows.push([{ text: '🧮 Team Over Lists', callback_data: 'a_tk_to' }]);
     rows.push([{ text: '📋 View Stored Matches', callback_data: 'a_tk_view' }]);
     rows.push([{ text: '🎯 Confidence', callback_data: 'a_tk_conf' }]);
     rows.push([{ text: '🗑 Clear Matches', callback_data: 'a_tk_clear' }]);
   }
+  rows.push([{ text: '📡 Auto Posting', callback_data: 'a_tk_ap' }]);
   rows.push([{ text: '⬅️ Admin Panel', callback_data: 'admin_menu' }]);
   return rows;
 }
@@ -314,6 +320,42 @@ async function handleTicketsRoll(chatId: number) {
   }
 }
 
+// ── Team Over Lists (read only): the same rules as the automatic posts ────
+// Sent to this private chat only. Nothing goes to the channel or the group.
+async function handleTicketsTeamOver(chatId: number) {
+  const l = await listStored();
+  if (!l.ok) {
+    await sendMessage(chatId, '❌ Could not read the storage: ' + l.error);
+    await showTicketsMenu(chatId);
+    return;
+  }
+  if (l.rows.length === 0) {
+    await sendMessage(chatId, 'The storage is empty. Add matches first.');
+    await showTicketsMenu(chatId);
+    return;
+  }
+
+  const r = runManual(l.rows.map((x) => ({ name: x.name, dataLine: x.dataLine, league: x.league })));
+  const messages: string[] = [];
+  messages.push(
+    'TEAM OVER LISTS (' + r.checked + ' matches checked' +
+      (r.unreadable.length > 0 ? ', could not read: ' + r.unreadable.join(', ') : '') + ')\n\nNORMAL POST:'
+  );
+  if (r.normal.length === 0) messages.push('Nothing qualifies for the normal post.');
+  else r.normal.forEach((m) => messages.push(m));
+  messages.push('PREMIUM POST:');
+  if (r.premium.length === 0) messages.push('Nothing qualifies for the premium post.');
+  else r.premium.forEach((m) => messages.push(m));
+
+  for (let i = 0; i < messages.length; i++) {
+    if (i === messages.length - 1) {
+      await sendMessage(chatId, messages[i], tkBack());
+    } else {
+      await sendMessage(chatId, messages[i]);
+    }
+  }
+}
+
 // ── Create Tickets (the 13-call rules; empties the storage) ───────────────
 async function handleTicketsCreateAsk(chatId: number) {
   const l = await listStored();
@@ -453,6 +495,8 @@ export async function handleTicketsButton(
     await handleTicketsPair(chatId);
   } else if (data === 'a_tk_roll') {
     await handleTicketsRoll(chatId);
+  } else if (data === 'a_tk_to') {
+    await handleTicketsTeamOver(chatId);
   } else if (data === 'a_tk_create') {
     await handleTicketsCreateAsk(chatId);
   } else if (data === 'a_tk_create_yes') {
@@ -461,5 +505,7 @@ export async function handleTicketsButton(
     await handleTicketsClearAsk(chatId);
   } else if (data === 'a_tk_clear_yes') {
     await handleTicketsClearDo(chatId);
+  } else if (data === 'a_tk_ap' || data.indexOf('a_tk_ap_') === 0) {
+    await handlePostAdmin(data, chatId);
   }
 }

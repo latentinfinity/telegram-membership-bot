@@ -14,10 +14,10 @@ function entry(p: Pick, mixed: boolean): string {
   const f = p.fixture;
   if (p.team) {
     const name = p.team === 'home' ? f.home : f.away;
-    return `${name} (${f.home} - ${f.away})` + (mixed ? ` - ${f.compName}` : '');
+    return `${name} (${f.home} - ${f.away})` + (mixed && f.compName ? ` - ${f.compName}` : '');
   }
   const st = stageText(f.stage);
-  return `${f.home} - ${f.away}` + (mixed ? ` (${f.compName}${st ? ' - ' + st : ''})` : '');
+  return `${f.home} - ${f.away}` + (mixed && f.compName ? ` (${f.compName}${st ? ' - ' + st : ''})` : '');
 }
 
 type Block = { title: string; picks: Pick[] };
@@ -53,7 +53,7 @@ export function formatPost(lists: Lists, premium: boolean): string[] {
     else cur = cur ? cur + '\n\n' + text : text;
   };
   for (const b of used) {
-    const title = (premium ? 'PREMIUM - ' : '') + (mixed ? '' : single + ' - ') + b.title;
+    const title = (premium ? 'PREMIUM - ' : '') + (mixed || !single ? '' : single + ' - ') + b.title;
     const lines = b.picks.map((p, i) => `${i + 1}) ${entry(p, mixed)}`);
     let part: string[] = [];
     let len = title.length;
