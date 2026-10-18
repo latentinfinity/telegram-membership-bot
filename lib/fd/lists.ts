@@ -58,11 +58,11 @@ export function buildLists(fixtures: FixtureIn[]): { lists: Lists; skipped: Skip
       const n15 = teamHigh15(v), n05 = team05(v);
       if (n15) L.teamO15.push({ fixture: f, team: side });
       else if (n05) L.teamO05.push({ fixture: f, team: side });
-      if (hasScores && (n15 || n05)) {
+      // premium only FILTERS the normal list the team is already in (never re-files it)
+      if (hasScores) {
         const g = side === 'home' ? Math.min(f.f1h!, f.f2h!) : Math.min(f.f1a!, f.f2a!);
-        if (g >= 4) L.premium.teamO25.push({ fixture: f, team: side });
-        else if (g >= 3) L.premium.teamO15.push({ fixture: f, team: side });
-        else if (g >= 2) L.premium.teamO05.push({ fixture: f, team: side });
+        if (n15 && g >= 3) L.premium.teamO15.push({ fixture: f, team: side });
+        else if (n05 && g >= 2) L.premium.teamO05.push({ fixture: f, team: side });
       }
     }
     if (hasScores) {
