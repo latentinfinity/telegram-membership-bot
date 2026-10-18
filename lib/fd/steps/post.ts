@@ -155,18 +155,24 @@ export const telegramSender: Sender = async (chatId, text) => {
   return { ok: false, error: last };
 };
 
+type Res = { data: unknown; error: { message: string } | null };
+// Awaits any Supabase query and hands back a plainly typed result (no library type parsing).
+async function exec(q: unknown): Promise<Res> {
+  return (await (q as PromiseLike<unknown>)) as Res;
+}
+
 export function supabasePostStore(): PostStore {
   const db = createAdminClient();
   const names = async (codes: string[]): Promise<Record<string, string>> => {
     const out: Record<string, string> = {};
     if (codes.length === 0) return out;
-    const c = await db.from('fd_competitions').select('code, name').in('code', codes);
-    for (const r of (c.data || []) as { code: string; name: string }[]) out[r.code] = r.name;
+    const c = await exec(db.from('fd_competitions').select('code, name').in('code', codes));
+    for (const r of ((c.data || []) as { code: string; name: string }[])) out[r.code] = r.name;
     return out;
   };
   return {
     async settings() {
-      const r = await db.from('fd_post_settings').select('*').eq('id', 1).maybeSingle();
+      const r = await exec(db.from('fd_post_settings').select('*').eq('id', 1).maybeSingle());
       const d = r.data as Record<string, unknown> | null;
       if (r.error || !d) return null;
       return {
@@ -176,64 +182,67 @@ export function supabasePostStore(): PostStore {
       };
     },
     async channelId() {
-      const r = await db.from('channel_config').select('channel_id').limit(1).maybeSingle();
+      const r = await exec(db.from('channel_config').select('channel_id').limit(1).maybeSingle());
       const v = (r.data as { channel_id?: unknown } | null)?.channel_id;
       return v === null || v === undefined ? null : String(v);
     },
     groupId() { return process.env.TELEGRAM_GROUP_ID || null; },
     async fixtures(startIso, endIso, predictedOnly) {
-      let q = db.from('fd_fixtures')
-        .select(predictedOnly
-          ? 'fd_match_id, comp_code, stage, match_date, home_name, away_name, hs, hc, asc_, ac, f1_home, f1_away, f2_home, f2_away'
-          : 'fd_match_id, comp_code, stage, match_date, home_name, away_name')
+      const cols = predictedOnly
+        ? 'fd_match_id, comp_code, stage, match_date, home_name, away_name, hs, hc, asc_, ac, f1_home, f1_away, f2_home, f2_away'
+        : 'fd_match_id, comp_code, stage, match_date, home_name, away_name';
+      const base = db.from('fd_fixtures').select(cols)
         .gte('match_date', startIso).lt('match_date', endIso)
         .order('match_date', { ascending: true }).limit(1000);
-      q = predictedOnly ? q.eq('status', 'pending').not('predicted_at', 'is', null) : q.in('status', ['pending', 'graded']);
-      const r = await q;
+      const r = await exec(
+        predictedOnly
+          ? base.eq('status', 'pending').not('predicted_at', 'is', null)
+          : base.in('status', ['pending', 'graded']),
+      );
       if (r.error) throw new Error(r.error.message);
-      const rows = (r.data || []) as Record<string, unknown>[];
+      const rows = (r.data || []) as unknown as Record<string, unknown>[];
       const nm = await names(Array.from(new Set(rows.map((x) => String(x.comp_code)))));
       return rows.map((x) => ({
         id: Number(x.fd_match_id), comp: String(x.comp_code), compName: nm[String(x.comp_code)] || String(x.comp_code),
         stage: String(x.stage || ''), matchDate: String(x.match_date), home: String(x.home_name), away: String(x.away_name),
-        hs: x.hs as number | string | null, hc: x.hc as number | string | null,
-        asc: x.asc_ as number | string | null, ac: x.ac as number | string | null,
-        f1h: x.f1_home as number | null, f1a: x.f1_away as number | null,
-        f2h: x.f2_home as number | null, f2a: x.f2_away as number | null,
+        hs: (x.hs ?? null) as number | string | null, hc: (x.hc ?? null) as number | string | null,
+        asc: (x.asc_ ?? null) as number | string | null, ac: (x.ac ?? null) as number | string | null,
+        f1h: (x.f1_home ?? null) as number | null, f1a: (x.f1_away ?? null) as number | null,
+        f2h: (x.f2_home ?? null) as number | null, f2a: (x.f2_away ?? null) as number | null,
       }));
     },
     async claim(key, kind, dest) {
-      const ins = await db.from('fd_post_log').insert({ post_key: key, kind, destination: dest, status: 'sending', attempts: 1 });
+      const ins = await exec(db.from('fd_post_log').insert({ post_key: key, kind, destination: dest, status: 'sending', attempts: 1 }));
       if (!ins.error) return 'claimed';
-      const cur = await db.from('fd_post_log').select('status, attempts, updated_at').eq('post_key', key).maybeSingle();
+      const cur = await exec(db.from('fd_post_log').select('status, attempts, updated_at').eq('post_key', key).maybeSingle());
       const row = cur.data as { status: string; attempts: number; updated_at: string } | null;
       if (!row) return 'busy';
       if (row.status === 'sent') return 'done';
       if (row.status === 'sending') {
         if (Date.now() - Date.parse(row.updated_at) > 600000)
-          await db.from('fd_post_log').update({ status: 'failed', attempts: 99, error: 'stuck while sending, not retried to avoid a duplicate', updated_at: new Date().toISOString() }).eq('post_key', key).eq('status', 'sending');
+          await exec(db.from('fd_post_log').update({ status: 'failed', attempts: 99, error: 'stuck while sending, not retried to avoid a duplicate', updated_at: new Date().toISOString() }).eq('post_key', key).eq('status', 'sending'));
         return 'busy';
       }
       if (row.attempts >= MAX_ATTEMPTS) return 'gaveup';
-      const up = await db.from('fd_post_log')
+      const up = await exec(db.from('fd_post_log')
         .update({ status: 'sending', attempts: row.attempts + 1, updated_at: new Date().toISOString() })
-        .eq('post_key', key).eq('status', 'failed').eq('attempts', row.attempts).select('post_key');
+        .eq('post_key', key).eq('status', 'failed').eq('attempts', row.attempts).select('post_key'));
       return up.data && (up.data as unknown[]).length > 0 ? 'claimed' : 'busy';
     },
     async finish(key, status, ids, error) {
       const patch: Record<string, unknown> = { status, message_ids: ids, error, updated_at: new Date().toISOString() };
       if (status === 'sent') patch.sent_at = new Date().toISOString();
       if (status === 'failed' && ids.length > 0) patch.attempts = 99; // partly sent: never auto-retry
-      await db.from('fd_post_log').update(patch).eq('post_key', key);
+      await exec(db.from('fd_post_log').update(patch).eq('post_key', key));
     },
     async doneKeys(keys) {
       if (keys.length === 0) return new Set<string>();
-      const r = await db.from('fd_post_log').select('post_key').in('post_key', keys).eq('status', 'sent');
+      const r = await exec(db.from('fd_post_log').select('post_key').in('post_key', keys).eq('status', 'sent'));
       return new Set(((r.data || []) as { post_key: string }[]).map((x) => x.post_key));
     },
     async markPosted(ids) {
       if (ids.length === 0) return;
-      await db.from('fd_fixtures').update({ posted_at: new Date().toISOString() }).in('fd_match_id', ids).is('posted_at', null);
+      await exec(db.from('fd_fixtures').update({ posted_at: new Date().toISOString() }).in('fd_match_id', ids).is('posted_at', null));
     },
   };
 }

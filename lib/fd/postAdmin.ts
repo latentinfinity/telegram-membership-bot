@@ -9,6 +9,10 @@ type S = {
   enabled: boolean; send_channel: boolean; send_group: boolean;
   week_day: number; week_time: string; today_time: string; pred_time: string; footer: string;
 };
+type Res = { data: unknown; error: { message: string } | null };
+async function exec(q: unknown): Promise<Res> {
+  return (await (q as PromiseLike<unknown>)) as Res;
+}
 type LogRow = { post_key: string; status: string; error: string | null; updated_at: string };
 
 const DAY = ['', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
@@ -16,10 +20,10 @@ const onoff = (b: boolean) => (b ? 'ON' : 'OFF');
 
 async function load(): Promise<{ s: S | null; logs: LogRow[]; error?: string }> {
   const db = createAdminClient();
-  const r = await db.from('fd_post_settings').select('*').eq('id', 1).maybeSingle();
+  const r = await exec(db.from('fd_post_settings').select('*').eq('id', 1).maybeSingle());
   if (r.error || !r.data) return { s: null, logs: [], error: r.error ? r.error.message : 'settings row missing' };
-  const l = await db.from('fd_post_log').select('post_key, status, error, updated_at')
-    .order('created_at', { ascending: false }).limit(8);
+  const l = await exec(db.from('fd_post_log').select('post_key, status, error, updated_at')
+    .order('created_at', { ascending: false }).limit(8));
   return { s: r.data as S, logs: (l.data || []) as LogRow[] };
 }
 
@@ -71,7 +75,7 @@ async function showMenu(chatId: number): Promise<void> {
 
 async function setField(field: 'enabled' | 'send_channel' | 'send_group', value: boolean): Promise<string | null> {
   const db = createAdminClient();
-  const r = await db.from('fd_post_settings').update({ [field]: value }).eq('id', 1);
+  const r = await exec(db.from('fd_post_settings').update({ [field]: value }).eq('id', 1));
   return r.error ? r.error.message : null;
 }
 
