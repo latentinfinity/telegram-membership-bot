@@ -17,8 +17,8 @@ export type Skipped = { id: number; reason: string };
 
 export const MODERATE = 50;
 export const HIGH = 65;
-// Team Over 0.5 list: own line O0.5 and confidence of 65 or more (High)
-export const O05_MIN = 65;
+// Team Over 0.5 list: own line O0.5 and confidence of 70 or more
+export const O05_MIN = 70;
 
 export function buildLists(fixtures: FixtureIn[]): { lists: Lists; skipped: Skipped[] } {
   const L: Lists = {
@@ -43,7 +43,7 @@ export function buildLists(fixtures: FixtureIn[]): { lists: Lists; skipped: Skip
     const mod15 = (v: V) => v.goals >= 2 && pctAtLeast(2, v.lam) >= MODERATE;
     // Moderate (50+) at 3 goals, line O2.5 or higher: used by Over 3.5
     const mod25 = (v: V) => v.goals >= 3 && pctAtLeast(3, v.lam) >= MODERATE;
-    // Team Over 0.5 list: the team's OWN line is O0.5 and 65+ (High) at 1 goal. No other team ever lands here.
+    // Team Over 0.5 list: the team's OWN line is O0.5 and 70+ at 1 goal. No other team ever lands here.
     const team05 = (v: V) => v.goals === 1 && pctAtLeast(1, v.lam) >= O05_MIN;
 
     // Over 2.5: both teams have a line of O1.5 or higher (no confidence check)
