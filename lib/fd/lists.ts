@@ -10,20 +10,20 @@ export type FixtureIn = {
 };
 export type Pick = { fixture: FixtureIn; team?: 'home' | 'away' };
 export type Lists = {
-  over25: Pick[]; over35: Pick[]; teamO15: Pick[]; teamO05: Pick[]; btts: Pick[];
-  premium: { over25: Pick[]; over35: Pick[]; teamO25: Pick[]; teamO15: Pick[]; teamO05: Pick[]; btts: Pick[] };
+  over25: Pick[]; over15: Pick[]; over35: Pick[]; teamO15: Pick[]; teamO05: Pick[]; btts: Pick[];
+  premium: { over25: Pick[]; over15: Pick[]; over35: Pick[]; teamO25: Pick[]; teamO15: Pick[]; teamO05: Pick[]; btts: Pick[] };
 };
 export type Skipped = { id: number; reason: string };
 
 export const MODERATE = 50;
 export const HIGH = 65;
-// Team Over 0.5 list: own line O0.5 and confidence of 80 or more
-export const O05_MIN = 80;
+// Team Over 0.5 list: own line O0.5 and confidence of 65 or more (High)
+export const O05_MIN = 65;
 
 export function buildLists(fixtures: FixtureIn[]): { lists: Lists; skipped: Skipped[] } {
   const L: Lists = {
-    over25: [], over35: [], teamO15: [], teamO05: [], btts: [],
-    premium: { over25: [], over35: [], teamO25: [], teamO15: [], teamO05: [], btts: [] },
+    over25: [], over15: [], over35: [], teamO15: [], teamO05: [], btts: [],
+    premium: { over25: [], over15: [], over35: [], teamO25: [], teamO15: [], teamO05: [], btts: [] },
   };
   const skipped: Skipped[] = [];
   for (const f of sortFixtures(fixtures)) {
@@ -43,14 +43,17 @@ export function buildLists(fixtures: FixtureIn[]): { lists: Lists; skipped: Skip
     const mod15 = (v: V) => v.goals >= 2 && pctAtLeast(2, v.lam) >= MODERATE;
     // Moderate (50+) at 3 goals, line O2.5 or higher: used by Over 3.5
     const mod25 = (v: V) => v.goals >= 3 && pctAtLeast(3, v.lam) >= MODERATE;
-    // Team Over 0.5 list: the team's OWN line is O0.5 and 80+ at 1 goal. No other team ever lands here.
+    // Team Over 0.5 list: the team's OWN line is O0.5 and 65+ (High) at 1 goal. No other team ever lands here.
     const team05 = (v: V) => v.goals === 1 && pctAtLeast(1, v.lam) >= O05_MIN;
 
     // Over 2.5: both teams have a line of O1.5 or higher (no confidence check)
     const o25 = H.goals >= 2 && A.goals >= 2;
+    // Over 1.5: one team is Team Over 1.5 (list rule), the other is Team Over 0.5 (list rule)
+    const o15 = (teamHigh15(H) && team05(A)) || (teamHigh15(A) && team05(H));
     const o35 = (mod25(H) && mod15(A)) || (mod25(A) && mod15(H));
     const bt = (mod15(H) || team05(H)) && (mod15(A) || team05(A));
     if (o25) L.over25.push({ fixture: f });
+    if (o15) L.over15.push({ fixture: f });
     if (o35) L.over35.push({ fixture: f });
     if (bt) L.btts.push({ fixture: f });
 
@@ -69,6 +72,7 @@ export function buildLists(fixtures: FixtureIn[]): { lists: Lists; skipped: Skip
     if (hasScores) {
       const t1 = f.f1h! + f.f1a!, t2 = f.f2h! + f.f2a!;
       if (o25 && t1 >= 4 && t2 >= 4) L.premium.over25.push({ fixture: f });
+      if (o15 && t1 >= 3 && t2 >= 3) L.premium.over15.push({ fixture: f });
       if (o35 && t1 >= 6 && t2 >= 6) L.premium.over35.push({ fixture: f });
       if (bt && Math.min(f.f1h!, f.f1a!, f.f2h!, f.f2a!) >= 2) L.premium.btts.push({ fixture: f });
     }

@@ -27,6 +27,7 @@ export function formatPost(lists: Lists, premium: boolean): string[] {
     ? [
         { title: 'My Best Matches for Over 2.5', picks: lists.premium.over25 },
         { title: 'My Best Matches for Over 3.5', picks: lists.premium.over35 },
+        { title: 'My Best Matches for Over 1.5', picks: lists.premium.over15 },
         { title: 'Possible Teams to score three or more goals', picks: lists.premium.teamO25 },
         { title: 'Possible Teams to score two or more goals', picks: lists.premium.teamO15 },
         { title: 'Possible Teams to score one or more goals', picks: lists.premium.teamO05 },
@@ -35,6 +36,7 @@ export function formatPost(lists: Lists, premium: boolean): string[] {
     : [
         { title: 'My Best Matches for Over 2.5', picks: lists.over25 },
         { title: 'My Best Matches for Over 3.5', picks: lists.over35 },
+        { title: 'My Best Matches for Over 1.5', picks: lists.over15 },
         { title: 'Possible Teams to score two or more goals', picks: lists.teamO15 },
         { title: 'Possible Teams to score one or more goals', picks: lists.teamO05 },
         { title: 'Both Teams to Score', picks: lists.btts },
