@@ -46,7 +46,8 @@ export function buildLists(fixtures: FixtureIn[]): { lists: Lists; skipped: Skip
     // Team Over 0.5 list: the team's OWN line is O0.5 and 80+ at 1 goal. No other team ever lands here.
     const team05 = (v: V) => v.goals === 1 && pctAtLeast(1, v.lam) >= O05_MIN;
 
-    const o25 = mod15(H) && mod15(A);
+    // Over 2.5: both teams have a line of O1.5 or higher (no confidence check)
+    const o25 = H.goals >= 2 && A.goals >= 2;
     const o35 = (mod25(H) && mod15(A)) || (mod25(A) && mod15(H));
     const bt = (mod15(H) || team05(H)) && (mod15(A) || team05(A));
     if (o25) L.over25.push({ fixture: f });
@@ -67,7 +68,7 @@ export function buildLists(fixtures: FixtureIn[]): { lists: Lists; skipped: Skip
     }
     if (hasScores) {
       const t1 = f.f1h! + f.f1a!, t2 = f.f2h! + f.f2a!;
-      if (o25 && t1 >= 5 && t2 >= 5) L.premium.over25.push({ fixture: f });
+      if (o25 && t1 >= 4 && t2 >= 4) L.premium.over25.push({ fixture: f });
       if (o35 && t1 >= 6 && t2 >= 6) L.premium.over35.push({ fixture: f });
       if (bt && Math.min(f.f1h!, f.f1a!, f.f2h!, f.f2a!) >= 2) L.premium.btts.push({ fixture: f });
     }

@@ -9,10 +9,10 @@ export function toHundredths(x: number | string | null | undefined): number | nu
   return Math.round(n * 100);
 }
 
-// R = 0.67*own scored + 0.5*opponent conceded, in exact integer maths.
+// R = 0.5*own scored + 0.5*opponent conceded, in exact integer maths.
 // Round up only if the decimal part is 0.6 or more.
 export function teamLine(s100: number, oc100: number): number {
-  const rn = 67 * s100 + 50 * oc100; // R in units of 0.0001
+  const rn = 50 * s100 + 50 * oc100; // R in units of 0.0001
   const whole = Math.floor(rn / 10000);
   const dec = rn - whole * 10000;
   return dec >= 6000 ? whole + 1 : whole;
