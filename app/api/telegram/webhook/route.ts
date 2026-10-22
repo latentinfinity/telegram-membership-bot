@@ -89,6 +89,7 @@ import {
 import type { MasCycle } from '@/lib/masanielloStore';
 import { runPrediction, formatPrediction, PREDICT_USAGE } from '@/lib/predict';
 import { handleTicketsButton, handleTicketsAdd } from '@/lib/ticketsUi'; // NEW
+import { handleAd2Reply } from '@/lib/ad2Admin'; // NEW (1win Ad)
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
@@ -1139,6 +1140,8 @@ export async function POST(req: Request) {
         const promptCommand = PROMPT_COMMANDS[replyText];
         if (promptCommand.startsWith('eng_')) {
           await handleEngagementReply(chatId, promptCommand, text);
+        } else if (promptCommand.startsWith('ad2_')) {
+          await handleAd2Reply(chatId, promptCommand, text, message.photo); // NEW (1win Ad)
         } else if (promptCommand === 'mas_new') {
           await handleMasanielloNew(chatId, from.id, text);
         } else if (promptCommand === 'mas_ticket') {

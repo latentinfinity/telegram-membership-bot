@@ -8,13 +8,14 @@
 //   a_tk_create      Create Tickets (confirm), a_tk_create_yes (do it)
 //   a_tk_pair        Best Options: the pool matches with one option each (a list, no tickets)
 //   a_tk_roll        Roll Over Matches: Over 2.5 then Over 1.5 list outside the pool
-//   a_tk_roll2       Roll Over List 2: total 3+ in both formulas, opposite-lean averages
+//   a_tk_roll2       Roll Over List 2: three sections
 //   a_tk_to          Team Over Lists: the new rules on the stored matches (private, read only)
 //   a_tk_cs          Correct Scores: the new correct score for every stored match (read only)
 //   a_tk_view        View Stored Matches
 //   a_tk_conf        Confidence lists
 //   a_tk_clear       Clear Matches (confirm), a_tk_clear_yes (do it)
 //   a_tk_ap*         Auto Posting menu (switches and latest posts), handled in lib/fd/postAdmin.ts
+//   a_tk_ad2*        1win Ad menu (text, time, image, switch), handled in lib/ad2Admin.ts
 // ═══════════════════════════════════════════════════════════════
 
 import { sendMessage } from '@/lib/telegram';
@@ -39,6 +40,7 @@ import { planRollOver, formatRollOver } from '@/lib/rollOver';
 import { planRollOver2, formatRollOver2 } from '@/lib/fd/rollOver2';
 import { runManual } from '@/lib/fd/manual';
 import { handlePostAdmin } from '@/lib/fd/postAdmin';
+import { handleAd2Button } from '@/lib/ad2Admin';
 import { runScores } from '@/lib/fd/scoreNew';
 import {
   listStored,
@@ -70,6 +72,7 @@ function tkMenu(storedCount: number): InlineKeyboard {
     rows.push([{ text: '🗑 Clear Matches', callback_data: 'a_tk_clear' }]);
   }
   rows.push([{ text: '📡 Auto Posting', callback_data: 'a_tk_ap' }]);
+  rows.push([{ text: '🎁 1win Ad', callback_data: 'a_tk_ad2' }]);
   rows.push([{ text: '⬅️ Admin Panel', callback_data: 'admin_menu' }]);
   return rows;
 }
@@ -326,8 +329,7 @@ async function handleTicketsRoll(chatId: number) {
   }
 }
 
-// ── Roll Over List 2 (read only): total 3+ in both formulas, then the ─────
-// ── averages must lean opposite ways. Private chat only. ──────────────────
+// ── Roll Over List 2 (read only): three sections. Private chat only. ──────
 async function handleTicketsRoll2(chatId: number) {
   const l = await listStored();
   if (!l.ok) {
@@ -572,5 +574,7 @@ export async function handleTicketsButton(
     await handleTicketsClearDo(chatId);
   } else if (data === 'a_tk_ap' || data.indexOf('a_tk_ap_') === 0) {
     await handlePostAdmin(data, chatId);
+  } else if (data === 'a_tk_ad2' || data.indexOf('a_tk_ad2_') === 0) {
+    await handleAd2Button(data, chatId, adminId);
   }
 }
