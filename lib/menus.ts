@@ -25,6 +25,12 @@ export const PROMPTS = {
     'Paste your matches now.\nFormat (time and form are optional):\n1) 20:45 Home - Away\nldlwl,wdwwl,1.2,1.42,2.5,1.6\nThe four numbers are: home scored, home conceded, away scored, away conceded.',
   tkAdd:
     'Paste the matches to store for tickets.\nSame format as Predict (time and form are optional):\n1) 20:45 Home - Away\nldlwl,wdwwl,1.2,1.42,2.5,1.6\nYou can add more batches later. A match with the same name replaces the old one.',
+  ad2Text:
+    'Send the new text for the 1win Ad.\nIt is posted exactly as you write it.',
+  ad2Time:
+    'Send the new time for the 1win Ad in Nigerian time (24h).\nExample: 09:30',
+  ad2Photo:
+    'Send the image for the 1win Ad as a photo.',
 };
 
 export const PROMPT_COMMANDS: Record<string, string> = {
@@ -43,6 +49,9 @@ export const PROMPT_COMMANDS: Record<string, string> = {
   [PROMPTS.masTicket]: 'mas_ticket',
   [PROMPTS.predict]: 'predict',
   [PROMPTS.tkAdd]: 'tk_add',
+  [PROMPTS.ad2Text]: 'ad2_text',
+  [PROMPTS.ad2Time]: 'ad2_time',
+  [PROMPTS.ad2Photo]: 'ad2_photo',
 };
 
 export function userMenu(isAdminUser: boolean): InlineKeyboard {
