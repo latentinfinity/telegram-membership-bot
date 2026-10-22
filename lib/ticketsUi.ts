@@ -8,6 +8,7 @@
 //   a_tk_create      Create Tickets (confirm), a_tk_create_yes (do it)
 //   a_tk_pair        Best Options: the pool matches with one option each (a list, no tickets)
 //   a_tk_roll        Roll Over Matches: Over 2.5 then Over 1.5 list outside the pool
+//   a_tk_roll2       Roll Over List 2: total 3+ in both formulas, opposite-lean averages
 //   a_tk_to          Team Over Lists: the new rules on the stored matches (private, read only)
 //   a_tk_cs          Correct Scores: the new correct score for every stored match (read only)
 //   a_tk_view        View Stored Matches
@@ -35,6 +36,7 @@ import type { RuleRow } from '@/lib/ruleTickets';
 import { planConfidence, formatConfidence } from '@/lib/confidence';
 import { planPairs, formatPairList } from '@/lib/pairTickets';
 import { planRollOver, formatRollOver } from '@/lib/rollOver';
+import { planRollOver2, formatRollOver2 } from '@/lib/fd/rollOver2';
 import { runManual } from '@/lib/fd/manual';
 import { handlePostAdmin } from '@/lib/fd/postAdmin';
 import { runScores } from '@/lib/fd/scoreNew';
@@ -60,6 +62,7 @@ function tkMenu(storedCount: number): InlineKeyboard {
     ]);
     rows.push([{ text: '🧩 Best Options', callback_data: 'a_tk_pair' }]);
     rows.push([{ text: '📈 Roll Over Matches', callback_data: 'a_tk_roll' }]);
+    rows.push([{ text: '📈 Roll Over List 2', callback_data: 'a_tk_roll2' }]);
     rows.push([{ text: '🧮 Team Over Lists', callback_data: 'a_tk_to' }]);
     rows.push([{ text: '⚽ Correct Scores', callback_data: 'a_tk_cs' }]);
     rows.push([{ text: '📋 View Stored Matches', callback_data: 'a_tk_view' }]);
@@ -323,6 +326,34 @@ async function handleTicketsRoll(chatId: number) {
   }
 }
 
+// ── Roll Over List 2 (read only): total 3+ in both formulas, then the ─────
+// ── averages must lean opposite ways. Private chat only. ──────────────────
+async function handleTicketsRoll2(chatId: number) {
+  const l = await listStored();
+  if (!l.ok) {
+    await sendMessage(chatId, '❌ Could not read the storage: ' + l.error);
+    await showTicketsMenu(chatId);
+    return;
+  }
+  if (l.rows.length === 0) {
+    await sendMessage(chatId, 'The storage is empty. Add matches first.');
+    await showTicketsMenu(chatId);
+    return;
+  }
+
+  const plan = planRollOver2(
+    l.rows.map((x) => ({ name: x.name, dataLine: x.dataLine, league: x.league }))
+  );
+  const chunks = formatRollOver2(plan);
+  for (let i = 0; i < chunks.length; i++) {
+    if (i === chunks.length - 1) {
+      await sendMessage(chatId, chunks[i], tkBack());
+    } else {
+      await sendMessage(chatId, chunks[i]);
+    }
+  }
+}
+
 // ── Team Over Lists (read only): the same rules as the automatic posts ────
 // Sent to this private chat only. Nothing goes to the channel or the group.
 async function handleTicketsTeamOver(chatId: number) {
@@ -525,6 +556,8 @@ export async function handleTicketsButton(
     await handleTicketsPair(chatId);
   } else if (data === 'a_tk_roll') {
     await handleTicketsRoll(chatId);
+  } else if (data === 'a_tk_roll2') {
+    await handleTicketsRoll2(chatId);
   } else if (data === 'a_tk_to') {
     await handleTicketsTeamOver(chatId);
   } else if (data === 'a_tk_cs') {
