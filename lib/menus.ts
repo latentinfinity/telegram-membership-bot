@@ -31,6 +31,14 @@ export const PROMPTS = {
     'Send the new time for the 1win Ad in Nigerian time (24h).\nExample: 09:30',
   ad2Photo:
     'Send the image for the 1win Ad as a photo.',
+  fbAddComment:
+    'Send the new Facebook comment text.\nIt is posted exactly as you write it.',
+  fbAddTrigger:
+    'Send the new trigger as: name | words | teaser | image title\nExample: Bet9ja Roll Over | bet9ja, rollover | Today Bet9ja Roll Over has been posted. Head over to Telegram to see it. | Bet9ja Roll Over\nWords are separated by commas and ALL of them must be in the channel post (capital letters are ignored). Use {n} in the teaser for the day number. The image title is optional.',
+  fbEditTeaser:
+    'Send: id | new teaser text\nExample: 3 | Congratulations Sportybet Rollover Day {n} won.\nThe id is shown in View Triggers.',
+  fbGeneric:
+    'Send the new text for the generic odds post.\nUse {n} where the number from the post should go.\nExample: {n} odds have been posted on our Telegram channel. Head over to see them.',
 };
 
 export const PROMPT_COMMANDS: Record<string, string> = {
@@ -52,6 +60,10 @@ export const PROMPT_COMMANDS: Record<string, string> = {
   [PROMPTS.ad2Text]: 'ad2_text',
   [PROMPTS.ad2Time]: 'ad2_time',
   [PROMPTS.ad2Photo]: 'ad2_photo',
+  [PROMPTS.fbAddComment]: 'fb_comment',
+  [PROMPTS.fbAddTrigger]: 'fb_trigger',
+  [PROMPTS.fbEditTeaser]: 'fb_tedit',
+  [PROMPTS.fbGeneric]: 'fb_generic',
 };
 
 export function userMenu(isAdminUser: boolean): InlineKeyboard {

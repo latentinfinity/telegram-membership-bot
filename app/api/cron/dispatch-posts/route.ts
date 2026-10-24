@@ -3,6 +3,7 @@ import { dispatchDuePosts, dispatchDailyAd } from '@/lib/scheduledPosts';
 import { dispatchEngagementContent } from '@/lib/engagement';
 import { dispatchAd2 } from '@/lib/ad2';
 import { runFbWatch } from '@/lib/fb/watch';
+import { runCleanup } from '@/lib/cleanup';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 30;
@@ -19,7 +20,8 @@ export async function GET(req: Request) {
   const ad = await dispatchDailyAd();
   const ad2 = await dispatchAd2();
   const fb = await runFbWatch();
+  const cleanup = await runCleanup();
   const engagement = await dispatchEngagementContent();
   
-  return NextResponse.json({ posts, ad, ad2, fb, engagement });
+  return NextResponse.json({ posts, ad, ad2, fb, cleanup, engagement });
 }

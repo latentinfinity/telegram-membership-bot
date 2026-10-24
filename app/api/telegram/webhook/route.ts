@@ -90,6 +90,8 @@ import type { MasCycle } from '@/lib/masanielloStore';
 import { runPrediction, formatPrediction, PREDICT_USAGE } from '@/lib/predict';
 import { handleTicketsButton, handleTicketsAdd } from '@/lib/ticketsUi'; // NEW
 import { handleAd2Reply } from '@/lib/ad2Admin'; // NEW (1win Ad)
+import { handleFbReply } from '@/lib/fb/fbAdmin'; // NEW (Facebook)
+import { handleChannelPost } from '@/lib/fb/teaser'; // NEW (Facebook)
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
@@ -1041,6 +1043,12 @@ export async function POST(req: Request) {
       return NextResponse.json({ ok: true });
     }
 
+    // NEW (Facebook): a new post on the channel. Makes a Facebook teaser if a rule matches.
+    if (update.channel_post) {
+      await handleChannelPost(update.channel_post);
+      return NextResponse.json({ ok: true });
+    }
+
     if (update.callback_query) {
       const cb = update.callback_query;
       await answerCallbackQuery(cb.id);
@@ -1142,6 +1150,8 @@ export async function POST(req: Request) {
           await handleEngagementReply(chatId, promptCommand, text);
         } else if (promptCommand.startsWith('ad2_')) {
           await handleAd2Reply(chatId, promptCommand, text, message.photo); // NEW (1win Ad)
+        } else if (promptCommand.startsWith('fb_')) {
+          await handleFbReply(chatId, promptCommand, text); // NEW (Facebook)
         } else if (promptCommand === 'mas_new') {
           await handleMasanielloNew(chatId, from.id, text);
         } else if (promptCommand === 'mas_ticket') {
