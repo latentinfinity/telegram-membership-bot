@@ -8,7 +8,7 @@
 //              (which is exactly t >= 3.6). Does not use the correct-score formulas.
 //   Section 3: matches that are in both Section 1 and Section 2.
 //   Section 4: from Section 3 only. Y = hs + as, Z = hc + ac, X = Y / Z.
-//              Keep 0.66 <= X <= 1.5 (both ends included). Z = 0 eliminates the match.
+//              Keep 0.77 <= X <= 1.3 (both ends included). Z = 0 eliminates the match.
 // All comparisons use exact integer maths (decimal text scaled by 10^9, BigInt).
 import { calibratedScores } from '../correctScore';
 
@@ -61,10 +61,10 @@ export function planRollOver2(rows: RollRow[]): RollPlan {
   const SIXTY_SEVEN = BigInt(67);
   
   const ZERO = BigInt(0);
-  const TWO = BigInt(2);
-  const THREE = BigInt(3);
+  const TEN = BigInt(10);
+  const THIRTEEN = BigInt(13);
   const HUNDRED = BigInt(100);
-  const SIXTY_SIX = BigInt(66);
+  const SEVENTY_SEVEN = BigInt(77);
   
   for (const row of rows) {
     const nums = lastFour(row.dataLine);
@@ -108,8 +108,8 @@ export function planRollOver2(rows: RollRow[]): RollPlan {
       const y = hs + as; // both teams' average scored
       const z = hc + ac; // both teams' average conceded
       if (z > ZERO) {
-        const atLeastLow = HUNDRED * y >= SIXTY_SIX * z; // X >= 0.66
-        const atMostHigh = TWO * y <= THREE * z; // X <= 1.5
+        const atLeastLow = HUNDRED * y >= SEVENTY_SEVEN * z; // X >= 0.77
+        const atMostHigh = TEN * y <= THIRTEEN * z; // X <= 1.3
         if (atLeastLow && atMostHigh) section4.push(row);
       }
     }
@@ -156,7 +156,7 @@ export function formatRollOver2(plan: RollPlan): string[] {
   addSection('SECTION 1 - Total 3+ and opposite lean', plan.section1);
   addSection('SECTION 2 - t rule (t 4+)', plan.section2);
   addSection('SECTION 3 - In both sections', plan.both);
-  addSection('SECTION 4 - From Section 3, X between 0.66 and 1.5', plan.section4);
+  addSection('SECTION 4 - From Section 3, X between 0.77 and 1.3', plan.section4);
   
   const messages: string[] = [];
   let current = title + '\n';
