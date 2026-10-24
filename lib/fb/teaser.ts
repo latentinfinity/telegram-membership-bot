@@ -1,6 +1,8 @@
-// lib/fb/teaser.ts  (NEW) - Facebook teaser posts for Telegram channel posts.
+// lib/fb/teaser.ts  (REPLACES the earlier version) - Facebook teaser posts for Telegram channel posts.
 // Matching is not case sensitive and ignores spaces ("Roll Over" = "rollover").
-// 1) trigger rules (all words must be present, first match wins)
+// 1) trigger rules (all words must be present, first match wins).
+//    The word "won" must be a whole word, and "not won" / "won't" do not count.
+//    If the teaser text has {n}, N is the number after the word "day" in the post.
 // 2) generic rule: a number directly before the word "odds" (10 odds, 200+ odds)
 // 3) anything else: skipped.
 // Every Facebook post gets a drawn image card. The comment under the new post
@@ -51,8 +53,19 @@ const DEFAULT_GENERIC = '{n} odds have been posted on our Telegram channel. Head
 // A number (optionally with a plus) directly before the word odds.
 const GENERIC_RE = /(\d+(?:[.,]\d+)?)\s*(\+?)\s*odds\b/i;
 
+// "won" as a whole word, but not "not won" or "won't".
+const WON_RE = /\bwon\b/i;
+const NEGATED_WON_RE = /\bnot\s+won\b|\bwon['\u2019]t\b/i;
+
+// The number after the word "day": "Day 5", "day5", "DAY 12".
+const DAY_RE = /\bday\s*(\d+)/i;
+
 function squash(text: string): string {
   return text.toLowerCase().replace(/\s+/g, '');
+}
+
+function hasWon(text: string): boolean {
+  return WON_RE.test(text) && !NEGATED_WON_RE.test(text);
 }
 
 export function matchText(text: string, triggers: Trigger[], genericText: string): Matched | null {
@@ -61,15 +74,28 @@ export function matchText(text: string, triggers: Trigger[], genericText: string
     .filter((t) => t.active && t.words.length > 0)
     .sort((a, b) => a.sort_order - b.sort_order || a.id - b.id);
   for (const t of ordered) {
-    if (t.words.every((w) => s.indexOf(squash(w)) !== -1)) {
-      return {
-        kind: 'trigger',
-        name: t.name,
-        teaser: t.teaser,
-        title: t.image_title,
-        sub: 'Posted on Telegram today',
-      };
+    const allFound = t.words.every((w) =>
+      w.toLowerCase() === 'won' ? hasWon(text) : s.indexOf(squash(w)) !== -1
+    );
+    if (!allFound) continue;
+
+    const isWon = t.words.some((w) => w.toLowerCase() === 'won');
+    const dm = DAY_RE.exec(text);
+    const n = dm ? dm[1] : '';
+    let teaser = t.teaser;
+    if (n) {
+      teaser = teaser.split('{n}').join(n);
+    } else {
+      // No day number in the post: drop "Day {n} " so the text still reads well.
+      teaser = teaser.split('Day {n} ').join('').split('{n}').join('');
     }
+    return {
+      kind: 'trigger',
+      name: t.name,
+      teaser,
+      title: t.image_title,
+      sub: isWon ? (n ? 'Day ' + n + ' won' : 'Won') : 'Posted on Telegram today',
+    };
   }
   const m = GENERIC_RE.exec(text);
   if (m) {
@@ -183,7 +209,9 @@ export async function processTeaser(opts: {
       return {
         ok: true,
         matched: matched.name,
-        note: 'dry run. Would post: "' + matched.teaser + '" with a card titled "' + matched.title + '"',
+        note:
+          'dry run. Would post: "' + matched.teaser + '" with a card titled "' + matched.title +
+          '" and subtitle "' + matched.sub + '"',
       };
     }
 
