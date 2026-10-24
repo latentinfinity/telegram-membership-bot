@@ -1,5 +1,5 @@
 // lib/fd/rollOver2.ts  (REPLACES the earlier version) - pure, read only.
-// One list, three sections:
+// One list, four sections:
 //   Section 1: total goals 3+ in BOTH correct-score formulas (5+ counts as 5),
 //              AND one side scored > conceded while the other conceded > scored
 //              (a tie on either side eliminates the match).
@@ -7,6 +7,8 @@
 //              t rounded up if its decimal is 0.6 or more, else down; keep t >= 4
 //              (which is exactly t >= 3.6). Does not use the correct-score formulas.
 //   Section 3: matches that are in both Section 1 and Section 2.
+//   Section 4: from Section 3 only. Y = hs + as, Z = hc + ac, X = Y / Z.
+//              Keep 0.66 <= X <= 1.5 (both ends included). Z = 0 eliminates the match.
 // All comparisons use exact integer maths (decimal text scaled by 10^9, BigInt).
 import { calibratedScores } from '../correctScore';
 
@@ -16,6 +18,7 @@ export type RollPlan = {
   section1: RollRow[];
   section2: RollRow[];
   both: RollRow[];
+  section4: RollRow[];
   total: number;
   unreadable: string[];
 };
@@ -50,11 +53,18 @@ export function planRollOver2(rows: RollRow[]): RollPlan {
   const section1: RollRow[] = [];
   const section2: RollRow[] = [];
   const both: RollRow[] = [];
+  const section4: RollRow[] = [];
   const unreadable: string[] = [];
   
   const SCALE2 = BigInt('1000000000000000000'); // 10^18, scale of a product
   const T_MIN = BigInt(360) * SCALE2; // (rh+ra)*67 >= 360 * 10^18  <=>  t >= 3.6
   const SIXTY_SEVEN = BigInt(67);
+  
+  const ZERO = BigInt(0);
+  const TWO = BigInt(2);
+  const THREE = BigInt(3);
+  const HUNDRED = BigInt(100);
+  const SIXTY_SIX = BigInt(66);
   
   for (const row of rows) {
     const nums = lastFour(row.dataLine);
@@ -91,10 +101,21 @@ export function planRollOver2(rows: RollRow[]): RollPlan {
     
     if (inOne) section1.push(row);
     if (inTwo) section2.push(row);
-    if (inOne && inTwo) both.push(row);
+    if (inOne && inTwo) {
+      both.push(row);
+      
+      // Section 4: only matches that are in Section 3.
+      const y = hs + as; // both teams' average scored
+      const z = hc + ac; // both teams' average conceded
+      if (z > ZERO) {
+        const atLeastLow = HUNDRED * y >= SIXTY_SIX * z; // X >= 0.66
+        const atMostHigh = TWO * y <= THREE * z; // X <= 1.5
+        if (atLeastLow && atMostHigh) section4.push(row);
+      }
+    }
   }
   
-  return { section1, section2, both, total: rows.length, unreadable };
+  return { section1, section2, both, section4, total: rows.length, unreadable };
 }
 
 const LIMIT = 3500;
@@ -108,7 +129,8 @@ export function formatRollOver2(plan: RollPlan): string[] {
     ' stored matches checked: ' +
     plan.section1.length + ' in Section 1, ' +
     plan.section2.length + ' in Section 2, ' +
-    plan.both.length + ' in both.'
+    plan.both.length + ' in Section 3, ' +
+    plan.section4.length + ' in Section 4.'
   );
   if (plan.unreadable.length > 0) {
     footerLines.push('Could not read: ' + plan.unreadable.join(', ') + '.');
@@ -134,6 +156,7 @@ export function formatRollOver2(plan: RollPlan): string[] {
   addSection('SECTION 1 - Total 3+ and opposite lean', plan.section1);
   addSection('SECTION 2 - t rule (t 4+)', plan.section2);
   addSection('SECTION 3 - In both sections', plan.both);
+  addSection('SECTION 4 - From Section 3, X between 0.66 and 1.5', plan.section4);
   
   const messages: string[] = [];
   let current = title + '\n';
