@@ -1,6 +1,7 @@
-// lib/cleanup.ts  (NEW) - once a day, deletes old LOG rows only (older than 30 days):
-// fb_comment_log, fb_teaser_log, fd_run_log, fd_post_log.
-// Does NOT touch fd_fixtures or fd_team_stats. Never throws.
+// lib/cleanup.ts  (REPLACES the earlier version) - once a day, deletes data older than 30 days:
+// log rows in fb_comment_log, fb_teaser_log, fd_run_log, fd_post_log,
+// and old matches in fd_fixtures (by kickoff date, no summary kept).
+// Does NOT touch fd_team_stats. Never throws.
 import { createAdminClient } from '@/lib/supabase/admin';
 
 const DAYS = 30;
@@ -11,6 +12,7 @@ const TARGETS: { table: string;column: string } [] = [
   { table: 'fb_teaser_log', column: 'created_at' },
   { table: 'fd_run_log', column: 'ran_at' },
   { table: 'fd_post_log', column: 'created_at' },
+  { table: 'fd_fixtures', column: 'match_date' },
 ];
 
 export type CleanupResult = { ran: boolean;note: string };
@@ -45,18 +47,7 @@ export async function runCleanup(): Promise < CleanupResult > {
       }
     }
     
-    let oldFixtures = 'unknown';
-    try {
-      const { count } = await supabase
-        .from('fd_fixtures')
-        .select('fd_match_id', { count: 'exact', head: true })
-        .lt('match_date', cutoff);
-      oldFixtures = String(count ?? 0);
-    } catch (e) {
-      console.error('cleanup fixtures count failed');
-    }
-    
-    const note = 'deleted ' + parts.join(', ') + '. Old fixtures kept: ' + oldFixtures;
+    const note = 'deleted ' + parts.join(', ');
     await supabase
       .from('fb_settings')
       .update({ last_event: ('cleanup: ' + note).slice(0, 300), last_event_at: now.toISOString() })
