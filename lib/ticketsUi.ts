@@ -10,6 +10,7 @@
 //   a_tk_roll        Roll Over Matches: Over 2.5 then Over 1.5 list outside the pool
 //   a_tk_roll2       Roll Over List 2: four sections
 //   a_tk_rs1         Roll Over Section 1 list: random removal + random Over 2.5 / Over 1.5
+//   a_tk_o15         Over 1.5 List: both formulas in 2:1/1:2/3:1/1:3, opposite lean, scored bigger
 //   a_tk_out         Outcome Tickets: Ticket 1 and Ticket 2 from the third correct score + Section 3
 //   a_tk_to          Team Over Lists: the new rules on the stored matches (private, read only)
 //   a_tk_cs          Correct Scores: the new correct score + win outcomes + rate subset (read only)
@@ -42,6 +43,7 @@ import { planPairs, formatPairList } from '@/lib/pairTickets';
 import { planRollOver, formatRollOver } from '@/lib/rollOver';
 import { planRollOver2, formatRollOver2 } from '@/lib/fd/rollOver2';
 import { planRollS1, formatRollS1 } from '@/lib/fd/rollTickets';
+import { planOver15, formatO15 } from '@/lib/fd/rollOver15';
 import { planOutcome, formatOutcome } from '@/lib/fd/outcomeTickets';
 import { runManual } from '@/lib/fd/manual';
 import { handlePostAdmin } from '@/lib/fd/postAdmin';
@@ -72,6 +74,7 @@ function tkMenu(storedCount: number): InlineKeyboard {
     rows.push([{ text: '📈 Roll Over Matches', callback_data: 'a_tk_roll' }]);
     rows.push([{ text: '📈 Roll Over List 2', callback_data: 'a_tk_roll2' }]);
     rows.push([{ text: '🎰 Roll Over Section 1 List', callback_data: 'a_tk_rs1' }]);
+    rows.push([{ text: '📌 Over 1.5 List', callback_data: 'a_tk_o15' }]);
     rows.push([{ text: '🎲 Outcome Tickets', callback_data: 'a_tk_out' }]);
     rows.push([{ text: '🧮 Team Over Lists', callback_data: 'a_tk_to' }]);
     rows.push([{ text: '⚽ Correct Scores', callback_data: 'a_tk_cs' }]);
@@ -392,6 +395,33 @@ async function handleTicketsRollS1(chatId: number) {
   }
 }
 
+// ── Over 1.5 List (read only, no random steps). Private chat only. ────────
+async function handleTicketsOver15(chatId: number) {
+  const l = await listStored();
+  if (!l.ok) {
+    await sendMessage(chatId, '❌ Could not read the storage: ' + l.error);
+    await showTicketsMenu(chatId);
+    return;
+  }
+  if (l.rows.length === 0) {
+    await sendMessage(chatId, 'The storage is empty. Add matches first.');
+    await showTicketsMenu(chatId);
+    return;
+  }
+
+  const plan = planOver15(
+    l.rows.map((x) => ({ name: x.name, dataLine: x.dataLine, league: x.league }))
+  );
+  const chunks = formatO15(plan);
+  for (let i = 0; i < chunks.length; i++) {
+    if (i === chunks.length - 1) {
+      await sendMessage(chatId, chunks[i], tkBack());
+    } else {
+      await sendMessage(chatId, chunks[i]);
+    }
+  }
+}
+
 // ── Outcome Tickets (read only, random on every run). Private chat only. ──
 async function handleTicketsOutcome(chatId: number) {
   const l = await listStored();
@@ -625,6 +655,8 @@ export async function handleTicketsButton(
     await handleTicketsRoll2(chatId);
   } else if (data === 'a_tk_rs1') {
     await handleTicketsRollS1(chatId);
+  } else if (data === 'a_tk_o15') {
+    await handleTicketsOver15(chatId);
   } else if (data === 'a_tk_out') {
     await handleTicketsOutcome(chatId);
   } else if (data === 'a_tk_to') {
