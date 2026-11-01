@@ -7,10 +7,18 @@
 //              t rounded up if its decimal is 0.6 or more, else down; keep t >= 4
 //              (which is exactly t >= 3.6). Does not use the correct-score formulas.
 //   Section 3: matches that are in both Section 1 and Section 2.
-//   Section 4: from Section 3 only. Y = hs + as, Z = hc + ac, X = Y / Z.
-//              Keep 0.77 <= X <= 1.3 (both ends included). Z = 0 eliminates the match.
+//   Section 4: from Section 3 only. Y = hs + as (both teams' average scored),
+//              Z = hc + ac (both teams' average conceded). One switch picks the rule:
+//                USE_RANGE = false -> keep the match if Y > Z (strictly; Y = Z eliminates)
+//                USE_RANGE = true  -> keep the match if 0.77 <= Y/Z <= 1.3 (both ends
+//                                     included; Z = 0 eliminates the match)
 // All comparisons use exact integer maths (decimal text scaled by 10^9, BigInt).
 import { calibratedScores } from '../correctScore';
+
+// ── THE SWITCH ─────────────────────────────────────────────────────────────
+// false = Section 4 uses "average scored bigger than average conceded".
+// true  = Section 4 uses the old range 0.77 to 1.3.
+const USE_RANGE: boolean = false;
 
 export type RollRow = { name: string;dataLine: string;league: string | null };
 
@@ -107,11 +115,15 @@ export function planRollOver2(rows: RollRow[]): RollPlan {
       // Section 4: only matches that are in Section 3.
       const y = hs + as; // both teams' average scored
       const z = hc + ac; // both teams' average conceded
-      if (z > ZERO) {
-        const atLeastLow = HUNDRED * y >= SEVENTY_SEVEN * z; // X >= 0.77
-        const atMostHigh = TEN * y <= THIRTEEN * z; // X <= 1.3
-        if (atLeastLow && atMostHigh) section4.push(row);
+      let pass: boolean;
+      if (USE_RANGE) {
+        // old rule: 0.77 <= Y/Z <= 1.3, both ends included, Z = 0 eliminates
+        pass = z > ZERO && HUNDRED * y >= SEVENTY_SEVEN * z && TEN * y <= THIRTEEN * z;
+      } else {
+        // new rule: average scored strictly bigger than average conceded
+        pass = y > z;
       }
+      if (pass) section4.push(row);
     }
   }
   
@@ -153,10 +165,14 @@ export function formatRollOver2(plan: RollPlan): string[] {
     });
   };
   
+  const section4Header = USE_RANGE ?
+    'SECTION 4 - From Section 3, X between 0.77 and 1.3' :
+    'SECTION 4 - From Section 3, scored bigger than conceded';
+  
   addSection('SECTION 1 - Total 3+ and opposite lean', plan.section1);
   addSection('SECTION 2 - t rule (t 4+)', plan.section2);
   addSection('SECTION 3 - In both sections', plan.both);
-  addSection('SECTION 4 - From Section 3, X between 0.77 and 1.3', plan.section4);
+  addSection(section4Header, plan.section4);
   
   const messages: string[] = [];
   let current = title + '\n';
