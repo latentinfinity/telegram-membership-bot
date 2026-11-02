@@ -5,7 +5,10 @@
 //   3. grade   (results, at most ~20 s)
 //   4. stats   (one competition, only if time is left and work exists)
 //   5. sync    (fixtures, only if time is left)
-// Run it from ONE cron job every 2 minutes. The lock keeps it to one run.
+// Run it from ONE cron job. The lock keeps it to one run.
+// Each step is wrapped on its own: if one step crashes (for example
+// football-data.org answering 500), the error is recorded in that step's
+// result and the other steps still run.
 
 import { runGradeStep } from './grade';
 import { runPredictStep } from './predict';
@@ -13,9 +16,9 @@ import { runPostStep } from './post';
 import { runStatsStep } from './stats';
 import { runSyncStep } from './sync';
 
-export type TickOptions = { comps: string[]; force: boolean };
+export type TickOptions = { comps: string[];force: boolean };
 
-function busy(r: Record<string, unknown>): boolean {
+function busy(r: Record < string, unknown > ): boolean {
   const s = JSON.stringify(r);
   return (
     /"(predicted|refreshed|graded|voided|rescheduled|teams_saved|new_rows_written)":[1-9]/.test(s) ||
@@ -26,25 +29,33 @@ function busy(r: Record<string, unknown>): boolean {
   );
 }
 
-export async function runTick(opts: TickOptions): Promise<Record<string, unknown>> {
+async function safe < T > (name: string, fn: () => Promise < T > ): Promise < T | { ok: false;error: string } > {
+  try {
+    return await fn();
+  } catch (e) {
+    return { ok: false, error: name + ': ' + (e instanceof Error ? e.message : String(e)) };
+  }
+}
+
+export async function runTick(opts: TickOptions): Promise < Record < string, unknown >> {
   const t0 = Date.now();
-  const out: Record<string, unknown> = {};
-
-  out.predict = await runPredictStep({ comps: opts.comps });
-  out.post = await runPostStep({ deadline: t0 + 14000 });
-  out.grade = await runGradeStep({ comps: opts.comps, deadline: t0 + 20000 });
-
+  const out: Record < string, unknown > = {};
+  
+  out.predict = await safe('predict', () => runPredictStep({ comps: opts.comps }));
+  out.post = await safe('post', () => runPostStep({ deadline: t0 + 14000 }));
+  out.grade = await safe('grade', () => runGradeStep({ comps: opts.comps, deadline: t0 + 20000 }));
+  
   if (Date.now() - t0 < 22000) {
-    out.stats = await runStatsStep({ comps: opts.comps, force: opts.force });
+    out.stats = await safe('stats', () => runStatsStep({ comps: opts.comps, force: opts.force }));
   } else {
     out.stats = { skipped: 'no time left this run' };
   }
   if (Date.now() - t0 < 30000) {
-    out.sync = await runSyncStep({ comps: opts.comps, rotate: true, deadline: t0 + 32000 });
+    out.sync = await safe('sync', () => runSyncStep({ comps: opts.comps, rotate: true, deadline: t0 + 32000 }));
   } else {
     out.sync = { skipped: 'no time left this run' };
   }
-
+  
   out.activity = busy(out);
   out.ok = !JSON.stringify(out).includes('"ok":false');
   return out;

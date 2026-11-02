@@ -3,6 +3,8 @@
 // Per competition: 1 call for a 9-day window, plus 1 call for the whole
 // group when one is ready. Competitions out of season cost nothing.
 // Nothing here makes a prediction.
+// A failure on one competition (for example football-data.org answering 500)
+// is recorded for that competition only; the others still run.
 
 import { fdGet, toISODate } from '../client';
 import type { FdMatchList } from '../client';
@@ -20,28 +22,28 @@ import {
 } from '../store';
 import type { CompetitionRow, NewFixture } from '../store';
 
-export type SyncOptions = { comps: string[]; rotate: boolean; deadline?: number };
+export type SyncOptions = { comps: string[];rotate: boolean;deadline ? : number };
 
 const DAY = 86400000;
 
-async function syncOne(row: CompetitionRow): Promise<Record<string, unknown>> {
-  const out: Record<string, unknown> = { comp: row.code };
+async function syncOne(row: CompetitionRow): Promise < Record < string, unknown >> {
+  const out: Record < string, unknown > = { comp: row.code };
   const now = Date.now();
   const from = toISODate(new Date(now - LOOKBACK_DAYS * DAY));
   const to = toISODate(new Date(now + LOOKAHEAD_DAYS * DAY));
-
-  const win = ((await fdGet<FdMatchList>('/competitions/' + row.code + '/matches?dateFrom=' + from + '&dateTo=' + to))
+  
+  const win = ((await fdGet < FdMatchList > ('/competitions/' + row.code + '/matches?dateFrom=' + from + '&dateTo=' + to))
     .data.matches || []) as MdMatch[];
   out.window_matches = win.length;
   if (win.length === 0) {
     out.note = 'no matches in the window';
     return out;
   }
-
+  
   const known = await getFixtureDates(win.map((m) => m.id));
   if (!known.ok) return { ...out, ok: false, error: known.error };
-  const stored = new Set<number>(Array.from(known.data.keys()));
-
+  const stored = new Set < number > (Array.from(known.data.keys()));
+  
   // Reschedules and cancellations of matches we already hold.
   let moved = 0;
   let voided = 0;
@@ -58,7 +60,7 @@ async function syncOne(row: CompetitionRow): Promise<Record<string, unknown>> {
   }
   if (moved) out.rescheduled = moved;
   if (voided) out.cancelled_voided = voided;
-
+  
   const plans = planGroups(win, stored, now);
   const ready = plans.filter((p) => p.eligible);
   const waiting = plans.filter((p) => !p.eligible);
@@ -78,21 +80,21 @@ async function syncOne(row: CompetitionRow): Promise<Record<string, unknown>> {
     }
     return out;
   }
-
+  
   const g = ready[0];
   out.groups_ready = ready.length;
-
+  
   // The whole group in one call, so no match of the matchday can be missed
   // (a Monday game can fall outside the window).
-  const full = ((await fdGet<FdMatchList>(
+  const full = ((await fdGet < FdMatchList > (
     '/competitions/' + row.code + '/matches?season=' + row.season_year +
-      '&stage=' + encodeURIComponent(g.stage) + '&matchday=' + g.matchday
+    '&stage=' + encodeURIComponent(g.stage) + '&matchday=' + g.matchday
   )).data.matches || []) as MdMatch[];
-
+  
   const fullKnown = await getFixtureDates(full.map((m) => m.id));
   if (!fullKnown.ok) return { ...out, ok: false, error: fullKnown.error };
-  const { toInsert, counts } = classifyGroup(full, new Set<number>(Array.from(fullKnown.data.keys())), now);
-
+  const { toInsert, counts } = classifyGroup(full, new Set < number > (Array.from(fullKnown.data.keys())), now);
+  
   const rows: NewFixture[] = toInsert.map((m) => ({
     fd_match_id: m.id,
     comp_code: row.code,
@@ -107,7 +109,7 @@ async function syncOne(row: CompetitionRow): Promise<Record<string, unknown>> {
   }));
   const ins = await insertFixtures(rows);
   if (!ins.ok) return { ...out, ok: false, error: ins.error };
-
+  
   const teams = await getTeamStats(row.code, row.season_year);
   const expected = expectedSize(g.stage, teams.ok ? teams.data.length : 0);
   const sum =
@@ -125,11 +127,11 @@ async function syncOne(row: CompetitionRow): Promise<Record<string, unknown>> {
   return out;
 }
 
-export async function runSyncStep(opts: SyncOptions): Promise<Record<string, unknown>> {
+export async function runSyncStep(opts: SyncOptions): Promise < Record < string, unknown >> {
   const t0 = Date.now();
   const list = await listCompetitions();
   if (!list.ok) return { ok: false, error: list.error };
-
+  
   let active = list.data.filter((r) => opts.comps.indexOf(r.code) !== -1 && r.in_season);
   const skipped = opts.comps.filter((c) => !active.some((r) => r.code === c));
   if (opts.rotate) {
@@ -141,13 +143,23 @@ export async function runSyncStep(opts: SyncOptions): Promise<Record<string, unk
       return x - y;
     });
   }
-
-  const results: Record<string, unknown>[] = [];
+  
+  const results: Record < string, unknown > [] = [];
   for (const row of active) {
     if (Date.now() > (opts.deadline ?? t0 + SYNC_BUDGET_MS)) break;
-    const res = await syncOne(row);
+    let res: Record < string, unknown > ;
+    let threw = false;
+    try {
+      res = await syncOne(row);
+    } catch (e) {
+      // for example football-data.org answering 500: record it, carry on
+      threw = true;
+      res = { comp: row.code, ok: false, error: e instanceof Error ? e.message : String(e) };
+    }
     results.push(res);
-    if (res.ok !== false) await markSyncChecked(row.code);
+    // A competition that threw is also marked as checked, so the rotation
+    // moves on and one broken competition cannot hold up the others.
+    if (res.ok !== false || threw) await markSyncChecked(row.code);
   }
   return {
     ok: true,
