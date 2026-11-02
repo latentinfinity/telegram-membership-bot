@@ -12,6 +12,7 @@
 //   a_tk_rs1         Roll Over Section 1 list: random removal + random Over 2.5 / Over 1.5
 //   a_tk_o15         Over 1.5 List: both formulas in 2:1/1:2/3:1/1:3, opposite lean, scored bigger
 //   a_tk_out         Outcome Tickets: Ticket 1 and Ticket 2 from the third correct score + Section 3
+//   a_tk_rk          Rankings menu; a_tk_rk_c_<CODE> one competition; a_tk_rk_p pasted matches
 //   a_tk_to          Team Over Lists: the new rules on the stored matches (private, read only)
 //   a_tk_cs          Correct Scores: the new correct score + win outcomes + rate subset (read only)
 //   a_tk_view        View Stored Matches
@@ -45,6 +46,7 @@ import { planRollOver2, formatRollOver2 } from '@/lib/fd/rollOver2';
 import { planRollS1, formatRollS1 } from '@/lib/fd/rollTickets';
 import { planOver15, formatO15 } from '@/lib/fd/rollOver15';
 import { planOutcome, formatOutcome } from '@/lib/fd/outcomeTickets';
+import { listRankComps, rankCompetition, rankPasted } from '@/lib/fd/ranking';
 import { runManual } from '@/lib/fd/manual';
 import { handlePostAdmin } from '@/lib/fd/postAdmin';
 import { handleAd2Button } from '@/lib/ad2Admin';
@@ -82,6 +84,7 @@ function tkMenu(storedCount: number): InlineKeyboard {
     rows.push([{ text: '🎯 Confidence', callback_data: 'a_tk_conf' }]);
     rows.push([{ text: '🗑 Clear Matches', callback_data: 'a_tk_clear' }]);
   }
+  rows.push([{ text: '📊 Rankings', callback_data: 'a_tk_rk' }]);
   rows.push([{ text: '📡 Auto Posting', callback_data: 'a_tk_ap' }]);
   rows.push([{ text: '💬 Facebook', callback_data: 'a_tk_fb' }]);
   rows.push([{ text: '🎁 1win Ad', callback_data: 'a_tk_ad2' }]);
@@ -105,6 +108,13 @@ function tkClearConfirm(): InlineKeyboard {
 
 function tkBack(): InlineKeyboard {
   return [[{ text: '⬅️ Tickets Menu', callback_data: 'a_tk_menu' }]];
+}
+
+function tkRankBack(): InlineKeyboard {
+  return [
+    [{ text: '📊 Rankings', callback_data: 'a_tk_rk' }],
+    [{ text: '⬅️ Tickets Menu', callback_data: 'a_tk_menu' }],
+  ];
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────
@@ -449,6 +459,65 @@ async function handleTicketsOutcome(chatId: number) {
   }
 }
 
+// ── Rankings (read only). Private chat only. ──────────────────────────────
+async function handleTicketsRankMenu(chatId: number) {
+  const r = await listRankComps();
+  const rows: InlineKeyboard = [];
+  let text = 'RANKINGS\n\nPick a competition, or the matches you pasted.';
+  if (r.ok) {
+    r.comps.forEach((c) => {
+      rows.push([{ text: c.name + ' (' + c.count + ')', callback_data: 'a_tk_rk_c_' + c.code }]);
+    });
+    if (r.comps.length === 0) text += '\n\nNo competition has stored matches right now.';
+  } else {
+    text += '\n\nCould not read the competitions (' + r.error + ').';
+  }
+  rows.push([{ text: '📋 Pasted matches', callback_data: 'a_tk_rk_p' }]);
+  rows.push([{ text: '⬅️ Tickets Menu', callback_data: 'a_tk_menu' }]);
+  await sendMessage(chatId, text, rows);
+}
+
+async function handleTicketsRankComp(chatId: number, code: string) {
+  if (!/^[A-Z0-9]{2,6}$/.test(code)) {
+    await sendMessage(chatId, 'That competition code is not valid.', tkRankBack());
+    return;
+  }
+  const r = await rankCompetition(code);
+  if (!r.ok) {
+    await sendMessage(chatId, '❌ Could not build the ranking: ' + r.error, tkRankBack());
+    return;
+  }
+  for (let i = 0; i < r.messages.length; i++) {
+    if (i === r.messages.length - 1) {
+      await sendMessage(chatId, r.messages[i], tkRankBack());
+    } else {
+      await sendMessage(chatId, r.messages[i]);
+    }
+  }
+}
+
+async function handleTicketsRankPasted(chatId: number) {
+  const l = await listStored();
+  if (!l.ok) {
+    await sendMessage(chatId, '❌ Could not read the storage: ' + l.error, tkRankBack());
+    return;
+  }
+  if (l.rows.length === 0) {
+    await sendMessage(chatId, 'The storage is empty. Add matches first.', tkRankBack());
+    return;
+  }
+  const chunks = rankPasted(
+    l.rows.map((x) => ({ name: x.name, dataLine: x.dataLine, league: x.league }))
+  );
+  for (let i = 0; i < chunks.length; i++) {
+    if (i === chunks.length - 1) {
+      await sendMessage(chatId, chunks[i], tkRankBack());
+    } else {
+      await sendMessage(chatId, chunks[i]);
+    }
+  }
+}
+
 // ── Team Over Lists (read only): the same rules as the automatic posts ────
 // Sent to this private chat only. Nothing goes to the channel or the group.
 async function handleTicketsTeamOver(chatId: number) {
@@ -659,6 +728,12 @@ export async function handleTicketsButton(
     await handleTicketsOver15(chatId);
   } else if (data === 'a_tk_out') {
     await handleTicketsOutcome(chatId);
+  } else if (data === 'a_tk_rk') {
+    await handleTicketsRankMenu(chatId);
+  } else if (data.indexOf('a_tk_rk_c_') === 0) {
+    await handleTicketsRankComp(chatId, data.slice('a_tk_rk_c_'.length));
+  } else if (data === 'a_tk_rk_p') {
+    await handleTicketsRankPasted(chatId);
   } else if (data === 'a_tk_to') {
     await handleTicketsTeamOver(chatId);
   } else if (data === 'a_tk_cs') {
