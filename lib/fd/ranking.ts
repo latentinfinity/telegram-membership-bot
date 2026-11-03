@@ -6,10 +6,11 @@
 //   both ends included (exact integer maths). Closest first. A match also gets a tick
 //   when BOTH correct-score formulas (Formula 1 and Formula 2) predict a draw
 //   (an equal score below 5; 5+ against 5+ is not counted as a draw).
-// OVER RANKING section: rHome = ac / (1 + hs), rAway = hc / (1 + as), Rank Point = rHome + rAway,
-//   t = hs + as compared EXACTLY (no rounding up). Each match is in ONE group only:
+// OVER RANKING section: r = ac/(1+hs) + hc/(1+as) (the old Rank Point), t = hs + as,
+//   Score = (r ^ 0.85) * (t ^ 0.15). Groups are by t, compared EXACTLY (no rounding up).
+//   Each match is in ONE group only:
 //   5+ (t >= 5), 4+ (4 <= t < 5), 3+ (3 <= t < 4), 2+ (2 <= t < 3). Below 2 is not listed.
-//   Inside a group the order is by Rank Point, highest first (not by t).
+//   Inside a group the order is by Score, highest first (not by t).
 // Part 1: one competition's stored pending matches (fd_fixtures).
 // Part 2: the matches pasted into the storage (one list across all leagues).
 import { createAdminClient } from '@/lib/supabase/admin';
@@ -25,6 +26,13 @@ export function awayPoint(hs: number, hc: number, as: number, ac: number): numbe
   return ((as / (1 + ac)) * hc) / (1 + hs);
 }
 
+// Score = (r ^ 0.85) * (t ^ 0.15), where r = ac/(1+hs) + hc/(1+as) and t = hs + as.
+export function overScore(hs: number, hc: number, as: number, ac: number): number {
+  const r = ac / (1 + hs) + hc / (1 + as);
+  const t = hs + as;
+  return Math.pow(r, 0.85) * Math.pow(t, 0.15);
+}
+
 type Side = { team: string; point: number; line: string; extra: string; order: number };
 type DrawEntry = {
   label: string;
@@ -38,7 +46,7 @@ type DrawEntry = {
 type OverItem = {
   name: string;
   tHundredths: number; // t = hs + as in hundredths, exact
-  rankPoint: number;
+  score: number;
   extra: string;
   order: number;
 };
@@ -130,7 +138,7 @@ function drawMessages(title: string, draws: DrawEntry[]): string[] {
   return pack(header, entries, '');
 }
 
-// The OVER RANKING section: one group per t band, ordered by Rank Point inside a group.
+// The OVER RANKING section: one group per t band, ordered by Score inside a group.
 function overMessages(title: string, items: OverItem[]): string[] {
   const bands: { label: string; min: number; max: number }[] = [
     { label: '5+', min: 500, max: Infinity },
@@ -143,7 +151,7 @@ function overMessages(title: string, items: OverItem[]): string[] {
   bands.forEach((b) => {
     const inBand = items
       .filter((x) => x.tHundredths >= b.min && x.tHundredths < b.max)
-      .sort((a, c) => c.rankPoint - a.rankPoint || a.order - c.order);
+      .sort((a, c) => c.score - a.score || a.order - c.order);
     listed += inBand.length;
     if (inBand.length === 0) {
       entries.push(b.label + ' (0)\nNone');
@@ -152,7 +160,7 @@ function overMessages(title: string, items: OverItem[]): string[] {
     inBand.forEach((m, i) => {
       const line =
         i + 1 + ') ' + m.name + '\nt ' + (m.tHundredths / 100).toFixed(2) +
-        ' | Rank Point ' + m.rankPoint.toFixed(3) + (m.extra ? '\n' + m.extra : '');
+        ' | Score ' + m.score.toFixed(3) + (m.extra ? '\n' + m.extra : '');
       entries.push(i === 0 ? b.label + ' (' + inBand.length + ')\n' + line : line);
     });
   });
@@ -272,7 +280,7 @@ export async function rankCompetition(
       overs.push({
         name: r.home_name + ' - ' + r.away_name,
         tHundredths: hundredths(hs) + hundredths(as),
-        rankPoint: ac / (1 + hs) + hc / (1 + as),
+        score: overScore(hs, hc, as, ac),
         extra: when,
         order: i,
       });
@@ -358,7 +366,7 @@ export function rankPasted(rows: PastedRow[]): string[] {
     overs.push({
       name: r.name,
       tHundredths: hundredths(hs) + hundredths(as),
-      rankPoint: ac / (1 + hs) + hc / (1 + as),
+      score: overScore(hs, hc, as, ac),
       extra: league,
       order: i,
     });
