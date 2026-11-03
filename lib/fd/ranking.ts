@@ -1,8 +1,10 @@
-// lib/fd/ranking.ts  (NEW) - Rankings. Read only. Private chat only.
+// lib/fd/ranking.ts  (REPLACES the earlier version) - Rankings. Read only. Private chat only.
 // Home point = ((hs / (1 + hc)) * ac) / (1 + as)
 // Away point = ((as / (1 + ac)) * hc) / (1 + hs)
 // Every side gets its own point (the home team its Home point, the away team its
 // Away point); all sides go in ONE list, highest first. No Home/Away split.
+// DRAW section (new): a match qualifies when |Home point - Away point| is between
+// 0.0 and 0.2, both ends included (exact integer maths). Listed closest first.
 // Part 1: one competition's stored pending matches (fd_fixtures).
 // Part 2: the matches pasted into the storage (one list across all leagues).
 import { createAdminClient } from '@/lib/supabase/admin';
@@ -18,9 +20,37 @@ export function awayPoint(hs: number, hc: number, as: number, ac: number): numbe
 }
 
 type Side = { team: string; point: number; line: string; extra: string; order: number };
+type DrawEntry = {
+  label: string;
+  home: number;
+  away: number;
+  diff: number;
+  extra: string;
+  order: number;
+};
 
 function round2(n: number): number {
   return Number(n.toFixed(2));
+}
+
+function hundredths(n: number): number {
+  return Math.round(round2(n) * 100);
+}
+
+// Exact test of |Home point - Away point| <= 0.2, with the four averages in hundredths.
+//   Home point = hs*ac / ((100+hc)*(100+as))
+//   Away point = as*hc / ((100+ac)*(100+hs))
+//   |Nh/Dh - Na/Da| <= 1/5  <=>  5 * |Nh*Da - Na*Dh| <= Dh*Da
+function isDraw(hs: number, hc: number, as: number, ac: number): boolean {
+  const B = (n: number) => BigInt(n);
+  const hundred = B(100);
+  const nh = B(hs) * B(ac);
+  const dh = (hundred + B(hc)) * (hundred + B(as));
+  const na = B(as) * B(hc);
+  const da = (hundred + B(ac)) * (hundred + B(hs));
+  let cross = nh * da - na * dh;
+  if (cross < B(0)) cross = -cross;
+  return B(5) * cross <= dh * da;
 }
 
 function kickoff(iso: string): string {
@@ -61,6 +91,19 @@ function rankedEntries(sides: Side[]): string[] {
   return sorted.map(
     (s, i) => i + 1 + ') ' + s.team + '   ' + s.point.toFixed(3) + '\n' + s.line + (s.extra ? '\n' + s.extra : '')
   );
+}
+
+// The DRAW section: closest first (smallest difference on top).
+function drawMessages(title: string, draws: DrawEntry[]): string[] {
+  const header = 'DRAW - ' + title + ' (' + draws.length + ')';
+  if (draws.length === 0) return [header + '\nNone'];
+  const sorted = draws.slice().sort((a, b) => a.diff - b.diff || a.order - b.order);
+  const entries = sorted.map(
+    (d, i) =>
+      i + 1 + ') ' + d.label + '\nHome ' + d.home.toFixed(3) + ' | Away ' + d.away.toFixed(3) +
+      ' | difference ' + d.diff.toFixed(3) + (d.extra ? '\n' + d.extra : '')
+  );
+  return pack(header, entries, '');
 }
 
 // ── Part 1: football-data competitions ────────────────────────────────────
@@ -127,6 +170,7 @@ export async function rankCompetition(
     const rows = (fx.data ?? []) as unknown as FxRow[];
 
     const sides: Side[] = [];
+    const draws: DrawEntry[] = [];
     const notRanked: string[] = [];
     rows.forEach((r, i) => {
       if (r.hs === null || r.hc === null || r.asc_ === null || r.ac === null) {
@@ -142,20 +186,32 @@ export async function rankCompetition(
         return;
       }
       const when = kickoff(r.match_date);
+      const hp = homePoint(hs, hc, as, ac);
+      const ap = awayPoint(hs, hc, as, ac);
       sides.push({
         team: r.home_name,
-        point: homePoint(hs, hc, as, ac),
+        point: hp,
         line: 'Home vs ' + r.away_name,
         extra: when,
         order: i * 2,
       });
       sides.push({
         team: r.away_name,
-        point: awayPoint(hs, hc, as, ac),
+        point: ap,
         line: 'Away at ' + r.home_name,
         extra: when,
         order: i * 2 + 1,
       });
+      if (isDraw(hundredths(hs), hundredths(hc), hundredths(as), hundredths(ac))) {
+        draws.push({
+          label: r.home_name + ' - ' + r.away_name,
+          home: hp,
+          away: ap,
+          diff: Math.abs(hp - ap),
+          extra: when,
+          order: i,
+        });
+      }
     });
 
     const footerParts: string[] = [];
@@ -165,7 +221,10 @@ export async function rankCompetition(
     if (sides.length === 0) {
       return { ok: true, messages: [header + '\n\nNo stored match has averages yet.\n\n' + footerParts.join('\n\n')] };
     }
-    return { ok: true, messages: pack(header, rankedEntries(sides), footerParts.join('\n\n')) };
+    const messages = pack(header, rankedEntries(sides), footerParts.join('\n\n')).concat(
+      drawMessages(name, draws)
+    );
+    return { ok: true, messages };
   } catch (e) {
     console.error('rank competition failed');
     return { ok: false, error: 'something went wrong' };
@@ -186,6 +245,7 @@ function splitTeams(name: string): { home: string; away: string } | null {
 
 export function rankPasted(rows: PastedRow[]): string[] {
   const sides: Side[] = [];
+  const draws: DrawEntry[] = [];
   const unreadable: string[] = [];
   rows.forEach((r, i) => {
     const parts = r.dataLine.split(',').map((x) => x.trim());
@@ -203,20 +263,32 @@ export function rankPasted(rows: PastedRow[]): string[] {
     const homeName = teams ? teams.home : 'Home team of ' + r.name;
     const awayName = teams ? teams.away : 'Away team of ' + r.name;
     const league = r.league ? r.league : '';
+    const hp = homePoint(hs, hc, as, ac);
+    const ap = awayPoint(hs, hc, as, ac);
     sides.push({
       team: homeName,
-      point: homePoint(hs, hc, as, ac),
+      point: hp,
       line: 'Home vs ' + awayName,
       extra: league,
       order: i * 2,
     });
     sides.push({
       team: awayName,
-      point: awayPoint(hs, hc, as, ac),
+      point: ap,
       line: 'Away at ' + homeName,
       extra: league,
       order: i * 2 + 1,
     });
+    if (isDraw(hundredths(hs), hundredths(hc), hundredths(as), hundredths(ac))) {
+      draws.push({
+        label: r.name,
+        home: hp,
+        away: ap,
+        diff: Math.abs(hp - ap),
+        extra: league,
+        order: i,
+      });
+    }
   });
 
   const footerParts: string[] = [];
@@ -226,5 +298,7 @@ export function rankPasted(rows: PastedRow[]): string[] {
   if (sides.length === 0) {
     return [header + '\n\nNo stored match could be read.\n\n' + footerParts.join('\n\n')];
   }
-  return pack(header, rankedEntries(sides), footerParts.join('\n\n'));
+  return pack(header, rankedEntries(sides), footerParts.join('\n\n')).concat(
+    drawMessages('pasted matches', draws)
+  );
 }
