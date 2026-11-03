@@ -1,13 +1,19 @@
 // lib/fd/ranking.ts  (REPLACES the earlier version) - Rankings. Read only. Private chat only.
 // Home point = ((hs / (1 + hc)) * ac) / (1 + as)
 // Away point = ((as / (1 + ac)) * hc) / (1 + hs)
-// Every side gets its own point (the home team its Home point, the away team its
-// Away point); all sides go in ONE list, highest first. No Home/Away split.
-// DRAW section (new): a match qualifies when |Home point - Away point| is between
-// 0.0 and 0.2, both ends included (exact integer maths). Listed closest first.
+// Every side gets its own point; all sides go in ONE list, highest first.
+// DRAW section: a match qualifies when |Home point - Away point| is between 0.0 and 0.2,
+//   both ends included (exact integer maths). Closest first. A match also gets a tick
+//   when BOTH correct-score formulas (Formula 1 and Formula 2) predict a draw
+//   (an equal score below 5; 5+ against 5+ is not counted as a draw).
+// OVER RANKING section: rHome = ac / (1 + hs), rAway = hc / (1 + as), Rank Point = rHome + rAway,
+//   t = hs + as compared EXACTLY (no rounding up). Each match is in ONE group only:
+//   5+ (t >= 5), 4+ (4 <= t < 5), 3+ (3 <= t < 4), 2+ (2 <= t < 3). Below 2 is not listed.
+//   Inside a group the order is by Rank Point, highest first (not by t).
 // Part 1: one competition's stored pending matches (fd_fixtures).
 // Part 2: the matches pasted into the storage (one list across all leagues).
 import { createAdminClient } from '@/lib/supabase/admin';
+import { calibratedScores } from '@/lib/correctScore';
 
 const LIMIT = 3500;
 
@@ -25,6 +31,14 @@ type DrawEntry = {
   home: number;
   away: number;
   diff: number;
+  tick: boolean;
+  extra: string;
+  order: number;
+};
+type OverItem = {
+  name: string;
+  tHundredths: number; // t = hs + as in hundredths, exact
+  rankPoint: number;
   extra: string;
   order: number;
 };
@@ -51,6 +65,15 @@ function isDraw(hs: number, hc: number, as: number, ac: number): boolean {
   let cross = nh * da - na * dh;
   if (cross < B(0)) cross = -cross;
   return B(5) * cross <= dh * da;
+}
+
+// True when BOTH correct-score formulas predict a draw (equal score below 5).
+function bothFormulasDraw(hs: number, hc: number, as: number, ac: number): boolean {
+  const s = calibratedScores(hs.toFixed(2), hc.toFixed(2), as.toFixed(2), ac.toFixed(2));
+  if (!s) return false;
+  const prodDraw = s.prod.home === s.prod.away && s.prod.home < 5;
+  const expDraw = s.exp.home === s.exp.away && s.exp.home < 5;
+  return prodDraw && expDraw;
 }
 
 function kickoff(iso: string): string {
@@ -100,10 +123,42 @@ function drawMessages(title: string, draws: DrawEntry[]): string[] {
   const sorted = draws.slice().sort((a, b) => a.diff - b.diff || a.order - b.order);
   const entries = sorted.map(
     (d, i) =>
-      i + 1 + ') ' + d.label + '\nHome ' + d.home.toFixed(3) + ' | Away ' + d.away.toFixed(3) +
+      i + 1 + ') ' + d.label + (d.tick ? ' ✅' : '') +
+      '\nHome ' + d.home.toFixed(3) + ' | Away ' + d.away.toFixed(3) +
       ' | difference ' + d.diff.toFixed(3) + (d.extra ? '\n' + d.extra : '')
   );
   return pack(header, entries, '');
+}
+
+// The OVER RANKING section: one group per t band, ordered by Rank Point inside a group.
+function overMessages(title: string, items: OverItem[]): string[] {
+  const bands: { label: string; min: number; max: number }[] = [
+    { label: '5+', min: 500, max: Infinity },
+    { label: '4+', min: 400, max: 500 },
+    { label: '3+', min: 300, max: 400 },
+    { label: '2+', min: 200, max: 300 },
+  ];
+  const entries: string[] = [];
+  let listed = 0;
+  bands.forEach((b) => {
+    const inBand = items
+      .filter((x) => x.tHundredths >= b.min && x.tHundredths < b.max)
+      .sort((a, c) => c.rankPoint - a.rankPoint || a.order - c.order);
+    listed += inBand.length;
+    if (inBand.length === 0) {
+      entries.push(b.label + ' (0)\nNone');
+      return;
+    }
+    inBand.forEach((m, i) => {
+      const line =
+        i + 1 + ') ' + m.name + '\nt ' + (m.tHundredths / 100).toFixed(2) +
+        ' | Rank Point ' + m.rankPoint.toFixed(3) + (m.extra ? '\n' + m.extra : '');
+      entries.push(i === 0 ? b.label + ' (' + inBand.length + ')\n' + line : line);
+    });
+  });
+  const below = items.length - listed;
+  const footer = below > 0 ? below + ' match(es) with t below 2.00 are not listed.' : '';
+  return pack('OVER RANKING - ' + title + ' (' + listed + ')', entries, footer);
 }
 
 // ── Part 1: football-data competitions ────────────────────────────────────
@@ -171,6 +226,7 @@ export async function rankCompetition(
 
     const sides: Side[] = [];
     const draws: DrawEntry[] = [];
+    const overs: OverItem[] = [];
     const notRanked: string[] = [];
     rows.forEach((r, i) => {
       if (r.hs === null || r.hc === null || r.asc_ === null || r.ac === null) {
@@ -208,10 +264,18 @@ export async function rankCompetition(
           home: hp,
           away: ap,
           diff: Math.abs(hp - ap),
+          tick: bothFormulasDraw(hs, hc, as, ac),
           extra: when,
           order: i,
         });
       }
+      overs.push({
+        name: r.home_name + ' - ' + r.away_name,
+        tHundredths: hundredths(hs) + hundredths(as),
+        rankPoint: ac / (1 + hs) + hc / (1 + as),
+        extra: when,
+        order: i,
+      });
     });
 
     const footerParts: string[] = [];
@@ -221,9 +285,9 @@ export async function rankCompetition(
     if (sides.length === 0) {
       return { ok: true, messages: [header + '\n\nNo stored match has averages yet.\n\n' + footerParts.join('\n\n')] };
     }
-    const messages = pack(header, rankedEntries(sides), footerParts.join('\n\n')).concat(
-      drawMessages(name, draws)
-    );
+    const messages = pack(header, rankedEntries(sides), footerParts.join('\n\n'))
+      .concat(drawMessages(name, draws))
+      .concat(overMessages(name, overs));
     return { ok: true, messages };
   } catch (e) {
     console.error('rank competition failed');
@@ -246,6 +310,7 @@ function splitTeams(name: string): { home: string; away: string } | null {
 export function rankPasted(rows: PastedRow[]): string[] {
   const sides: Side[] = [];
   const draws: DrawEntry[] = [];
+  const overs: OverItem[] = [];
   const unreadable: string[] = [];
   rows.forEach((r, i) => {
     const parts = r.dataLine.split(',').map((x) => x.trim());
@@ -285,10 +350,18 @@ export function rankPasted(rows: PastedRow[]): string[] {
         home: hp,
         away: ap,
         diff: Math.abs(hp - ap),
+        tick: bothFormulasDraw(hs, hc, as, ac),
         extra: league,
         order: i,
       });
     }
+    overs.push({
+      name: r.name,
+      tHundredths: hundredths(hs) + hundredths(as),
+      rankPoint: ac / (1 + hs) + hc / (1 + as),
+      extra: league,
+      order: i,
+    });
   });
 
   const footerParts: string[] = [];
@@ -298,7 +371,7 @@ export function rankPasted(rows: PastedRow[]): string[] {
   if (sides.length === 0) {
     return [header + '\n\nNo stored match could be read.\n\n' + footerParts.join('\n\n')];
   }
-  return pack(header, rankedEntries(sides), footerParts.join('\n\n')).concat(
-    drawMessages('pasted matches', draws)
-  );
+  return pack(header, rankedEntries(sides), footerParts.join('\n\n'))
+    .concat(drawMessages('pasted matches', draws))
+    .concat(overMessages('pasted matches', overs));
 }
