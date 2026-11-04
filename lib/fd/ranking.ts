@@ -2,11 +2,14 @@
 // Home point = ((hs / (1 + hc)) * ac) / (1 + as)
 // Away point = ((as / (1 + ac)) * hc) / (1 + hs)
 // Every side gets its own point; all sides go in ONE list, highest first.
+// RX 2+ section (after the main list, before DRAW): Home rx = Home point / Away point,
+//   Away rx = Away point / Home point. A side qualifies when its rx is 2 or more
+//   (exact integer maths). If the opposing point is 0 the side is eliminated.
 // DRAW section: a match qualifies when |Home point - Away point| is between 0.0 and 0.2,
 //   both ends included (exact integer maths). Closest first. A match also gets a tick
 //   when BOTH correct-score formulas (Formula 1 and Formula 2) predict a draw
 //   (an equal score below 5; 5+ against 5+ is not counted as a draw).
-// OVER RANKING section: r = ac/(1+hs) + hc/(1+as) (the old Rank Point), t = hs + as,
+// OVER RANKING section: r = ac/(1+hs) + hc/(1+as), t = hs + as,
 //   Score = (r ^ 0.85) * (t ^ 0.15). Groups are by t, compared EXACTLY (no rounding up).
 //   Each match is in ONE group only:
 //   5+ (t >= 5), 4+ (4 <= t < 5), 3+ (3 <= t < 4), 2+ (2 <= t < 3). Below 2 is not listed.
@@ -34,6 +37,7 @@ export function overScore(hs: number, hc: number, as: number, ac: number): numbe
 }
 
 type Side = { team: string; point: number; line: string; extra: string; order: number };
+type RxItem = { team: string; rx: number; line: string; extra: string; order: number };
 type DrawEntry = {
   label: string;
   home: number;
@@ -73,6 +77,24 @@ function isDraw(hs: number, hc: number, as: number, ac: number): boolean {
   let cross = nh * da - na * dh;
   if (cross < B(0)) cross = -cross;
   return B(5) * cross <= dh * da;
+}
+
+// Exact RX test with the four averages in hundredths.
+//   Home rx = Hp / Ap >= 2  <=>  Nh*Da >= 2*Na*Dh, and needs Ap > 0 (Na > 0)
+//   Away rx = Ap / Hp >= 2  <=>  Na*Dh >= 2*Nh*Da, and needs Hp > 0 (Nh > 0)
+function rxQualifies(hs: number, hc: number, as: number, ac: number): { home: boolean; away: boolean } {
+  const B = (n: number) => BigInt(n);
+  const zero = B(0);
+  const two = B(2);
+  const hundred = B(100);
+  const nh = B(hs) * B(ac);
+  const dh = (hundred + B(hc)) * (hundred + B(as));
+  const na = B(as) * B(hc);
+  const da = (hundred + B(ac)) * (hundred + B(hs));
+  return {
+    home: na > zero && nh * da >= two * na * dh,
+    away: nh > zero && na * dh >= two * nh * da,
+  };
 }
 
 // True when BOTH correct-score formulas predict a draw (equal score below 5).
@@ -122,6 +144,17 @@ function rankedEntries(sides: Side[]): string[] {
   return sorted.map(
     (s, i) => i + 1 + ') ' + s.team + '   ' + s.point.toFixed(3) + '\n' + s.line + (s.extra ? '\n' + s.extra : '')
   );
+}
+
+// The RX 2+ section: one descending list, highest rx first.
+function rxMessages(title: string, items: RxItem[]): string[] {
+  const header = 'RX 2+ - ' + title + ' (' + items.length + ')';
+  if (items.length === 0) return [header + '\nNone'];
+  const sorted = items.slice().sort((a, b) => b.rx - a.rx || a.order - b.order);
+  const entries = sorted.map(
+    (x, i) => i + 1 + ') ' + x.team + '   rx ' + x.rx.toFixed(3) + '\n' + x.line + (x.extra ? '\n' + x.extra : '')
+  );
+  return pack(header, entries, '');
 }
 
 // The DRAW section: closest first (smallest difference on top).
@@ -233,6 +266,7 @@ export async function rankCompetition(
     const rows = (fx.data ?? []) as unknown as FxRow[];
 
     const sides: Side[] = [];
+    const rxItems: RxItem[] = [];
     const draws: DrawEntry[] = [];
     const overs: OverItem[] = [];
     const notRanked: string[] = [];
@@ -266,6 +300,13 @@ export async function rankCompetition(
         extra: when,
         order: i * 2 + 1,
       });
+      const q = rxQualifies(hundredths(hs), hundredths(hc), hundredths(as), hundredths(ac));
+      if (q.home) {
+        rxItems.push({ team: r.home_name, rx: hp / ap, line: 'Home vs ' + r.away_name, extra: when, order: i * 2 });
+      }
+      if (q.away) {
+        rxItems.push({ team: r.away_name, rx: ap / hp, line: 'Away at ' + r.home_name, extra: when, order: i * 2 + 1 });
+      }
       if (isDraw(hundredths(hs), hundredths(hc), hundredths(as), hundredths(ac))) {
         draws.push({
           label: r.home_name + ' - ' + r.away_name,
@@ -294,6 +335,7 @@ export async function rankCompetition(
       return { ok: true, messages: [header + '\n\nNo stored match has averages yet.\n\n' + footerParts.join('\n\n')] };
     }
     const messages = pack(header, rankedEntries(sides), footerParts.join('\n\n'))
+      .concat(rxMessages(name, rxItems))
       .concat(drawMessages(name, draws))
       .concat(overMessages(name, overs));
     return { ok: true, messages };
@@ -317,6 +359,7 @@ function splitTeams(name: string): { home: string; away: string } | null {
 
 export function rankPasted(rows: PastedRow[]): string[] {
   const sides: Side[] = [];
+  const rxItems: RxItem[] = [];
   const draws: DrawEntry[] = [];
   const overs: OverItem[] = [];
   const unreadable: string[] = [];
@@ -352,6 +395,13 @@ export function rankPasted(rows: PastedRow[]): string[] {
       extra: league,
       order: i * 2 + 1,
     });
+    const q = rxQualifies(hundredths(hs), hundredths(hc), hundredths(as), hundredths(ac));
+    if (q.home) {
+      rxItems.push({ team: homeName, rx: hp / ap, line: 'Home vs ' + awayName, extra: league, order: i * 2 });
+    }
+    if (q.away) {
+      rxItems.push({ team: awayName, rx: ap / hp, line: 'Away at ' + homeName, extra: league, order: i * 2 + 1 });
+    }
     if (isDraw(hundredths(hs), hundredths(hc), hundredths(as), hundredths(ac))) {
       draws.push({
         label: r.name,
@@ -380,6 +430,7 @@ export function rankPasted(rows: PastedRow[]): string[] {
     return [header + '\n\nNo stored match could be read.\n\n' + footerParts.join('\n\n')];
   }
   return pack(header, rankedEntries(sides), footerParts.join('\n\n'))
+    .concat(rxMessages('pasted matches', rxItems))
     .concat(drawMessages('pasted matches', draws))
     .concat(overMessages('pasted matches', overs));
 }
