@@ -2,9 +2,9 @@
 // Home point = ((hs / (1 + hc)) * ac) / (1 + as)
 // Away point = ((as / (1 + ac)) * hc) / (1 + hs)
 // Every side gets its own point; all sides go in ONE list, highest first.
-// RX 2+ section (after the main list, before DRAW):
-//   Home rx = Home point / (1 + Away point), Away rx = Away point / (1 + Home point).
-//   A side qualifies when its rx is 2 or more (exact integer maths).
+// RX 2+ section (after the main list, before DRAW): Home rx = Home point / Away point,
+//   Away rx = Away point / Home point. A side qualifies when its rx is 2 or more
+//   (exact integer maths). If the opposing point is 0 the side is eliminated.
 // DRAW section: a match qualifies when |Home point - Away point| is between 0.0 and 0.2,
 //   both ends included (exact integer maths). Closest first. A match also gets a tick
 //   when BOTH correct-score formulas (Formula 1 and Formula 2) predict a draw
@@ -79,11 +79,12 @@ function isDraw(hs: number, hc: number, as: number, ac: number): boolean {
   return B(5) * cross <= dh * da;
 }
 
-// Exact RX test with the four averages in hundredths. Hp = Nh/Dh, Ap = Na/Da.
-//   Home rx = Hp / (1 + Ap) = Nh*Da / (Dh*(Da+Na))   >= 2  <=>  Nh*Da >= 2*Dh*(Da+Na)
-//   Away rx = Ap / (1 + Hp) = Na*Dh / (Da*(Dh+Nh))   >= 2  <=>  Na*Dh >= 2*Da*(Dh+Nh)
+// Exact RX test with the four averages in hundredths.
+//   Home rx = Hp / Ap >= 2  <=>  Nh*Da >= 2*Na*Dh, and needs Ap > 0 (Na > 0)
+//   Away rx = Ap / Hp >= 2  <=>  Na*Dh >= 2*Nh*Da, and needs Hp > 0 (Nh > 0)
 function rxQualifies(hs: number, hc: number, as: number, ac: number): { home: boolean; away: boolean } {
   const B = (n: number) => BigInt(n);
+  const zero = B(0);
   const two = B(2);
   const hundred = B(100);
   const nh = B(hs) * B(ac);
@@ -91,8 +92,8 @@ function rxQualifies(hs: number, hc: number, as: number, ac: number): { home: bo
   const na = B(as) * B(hc);
   const da = (hundred + B(ac)) * (hundred + B(hs));
   return {
-    home: nh * da >= two * dh * (da + na),
-    away: na * dh >= two * da * (dh + nh),
+    home: na > zero && nh * da >= two * na * dh,
+    away: nh > zero && na * dh >= two * nh * da,
   };
 }
 
@@ -301,10 +302,10 @@ export async function rankCompetition(
       });
       const q = rxQualifies(hundredths(hs), hundredths(hc), hundredths(as), hundredths(ac));
       if (q.home) {
-        rxItems.push({ team: r.home_name, rx: hp / (1 + ap), line: 'Home vs ' + r.away_name, extra: when, order: i * 2 });
+        rxItems.push({ team: r.home_name, rx: hp / ap, line: 'Home vs ' + r.away_name, extra: when, order: i * 2 });
       }
       if (q.away) {
-        rxItems.push({ team: r.away_name, rx: ap / (1 + hp), line: 'Away at ' + r.home_name, extra: when, order: i * 2 + 1 });
+        rxItems.push({ team: r.away_name, rx: ap / hp, line: 'Away at ' + r.home_name, extra: when, order: i * 2 + 1 });
       }
       if (isDraw(hundredths(hs), hundredths(hc), hundredths(as), hundredths(ac))) {
         draws.push({
@@ -396,10 +397,10 @@ export function rankPasted(rows: PastedRow[]): string[] {
     });
     const q = rxQualifies(hundredths(hs), hundredths(hc), hundredths(as), hundredths(ac));
     if (q.home) {
-      rxItems.push({ team: homeName, rx: hp / (1 + ap), line: 'Home vs ' + awayName, extra: league, order: i * 2 });
+      rxItems.push({ team: homeName, rx: hp / ap, line: 'Home vs ' + awayName, extra: league, order: i * 2 });
     }
     if (q.away) {
-      rxItems.push({ team: awayName, rx: ap / (1 + hp), line: 'Away at ' + homeName, extra: league, order: i * 2 + 1 });
+      rxItems.push({ team: awayName, rx: ap / hp, line: 'Away at ' + homeName, extra: league, order: i * 2 + 1 });
     }
     if (isDraw(hundredths(hs), hundredths(hc), hundredths(as), hundredths(ac))) {
       draws.push({
