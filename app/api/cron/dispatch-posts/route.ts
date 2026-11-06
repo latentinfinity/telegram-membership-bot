@@ -1,8 +1,4 @@
 import { NextResponse } from 'next/server';
-import { dispatchDuePosts, dispatchDailyAd } from '@/lib/scheduledPosts';
-import { dispatchEngagementContent } from '@/lib/engagement';
-import { dispatchAd2 } from '@/lib/ad2';
-import { runFbWatch } from '@/lib/fb/watch';
 import { runCleanup } from '@/lib/cleanup';
 
 export const dynamic = 'force-dynamic';
@@ -16,12 +12,10 @@ export async function GET(req: Request) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
   
-  const posts = await dispatchDuePosts();
-  const ad = await dispatchDailyAd();
-  const ad2 = await dispatchAd2();
-  const fb = await runFbWatch();
-  const cleanup = await runCleanup();
-  const engagement = await dispatchEngagementContent();
-  
-  return NextResponse.json({ posts, ad, ad2, fb, cleanup, engagement });
+  try {
+    const cleanup = await runCleanup();
+    return NextResponse.json({ ok: true, cleanup });
+  } catch (e) {
+    return NextResponse.json({ ok: false, error: String(e) }, { status: 500 });
+  }
 }
