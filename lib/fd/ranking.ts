@@ -14,8 +14,8 @@
 //   Each match is in ONE group only:
 //   5+ (t >= 5), 4+ (4 <= t < 5), 3+ (3 <= t < 4), 2+ (2 <= t < 3). Below 2 is not listed.
 //   Inside a group the order is by Score, highest first (not by t).
-//   TICK: a match gets a ✅ when (home conceded + away conceded) / 2 is 60% or more of its
-//   group number (5+ -> 3.0, 4+ -> 2.4, 3+ -> 1.8, 2+ -> 1.2). Exact integer maths.
+//   TICK: a match gets a ✅ when (home conceded + away conceded) / (home scored + away scored)
+//   is from 0.77 to 1.3, both ends included. Exact integer maths.
 // Part 1: one competition's stored pending matches (fd_fixtures).
 // Part 2: the matches pasted into the storage (one list across all leagues).
 import { createAdminClient } from '@/lib/supabase/admin';
@@ -175,14 +175,15 @@ function drawMessages(title: string, draws: DrawEntry[]): string[] {
 }
 
 // The OVER RANKING section: one group per t band, ordered by Score inside a group.
-// A match gets a ✅ when (home conceded + away conceded) / 2 >= 0.6 * band number.
-// In hundredths: concedeHundredths >= 120 * band number (exact integers).
+// A match gets a ✅ when C / T is from 0.77 to 1.3 (both included), where
+// C = home conceded + away conceded and T = home scored + away scored.
+// In hundredths (exact integers): 77 * T <= 100 * C  and  10 * C <= 13 * T.
 function overMessages(title: string, items: OverItem[]): string[] {
-  const bands: { label: string; n: number; min: number; max: number }[] = [
-    { label: '5+', n: 5, min: 500, max: Infinity },
-    { label: '4+', n: 4, min: 400, max: 500 },
-    { label: '3+', n: 3, min: 300, max: 400 },
-    { label: '2+', n: 2, min: 200, max: 300 },
+  const bands: { label: string; min: number; max: number }[] = [
+    { label: '5+', min: 500, max: Infinity },
+    { label: '4+', min: 400, max: 500 },
+    { label: '3+', min: 300, max: 400 },
+    { label: '2+', min: 200, max: 300 },
   ];
   const entries: string[] = [];
   let listed = 0;
@@ -196,7 +197,9 @@ function overMessages(title: string, items: OverItem[]): string[] {
       return;
     }
     inBand.forEach((m, i) => {
-      const tick = m.concedeHundredths >= 120 * b.n ? ' ✅' : '';
+      const c = m.concedeHundredths;
+      const t = m.tHundredths;
+      const tick = 77 * t <= 100 * c && 10 * c <= 13 * t ? ' ✅' : '';
       const line =
         i + 1 + ') ' + m.name + tick + '\nt ' + (m.tHundredths / 100).toFixed(2) +
         ' | Score ' + m.score.toFixed(3) + (m.extra ? '\n' + m.extra : '');
