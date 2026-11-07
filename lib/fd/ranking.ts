@@ -14,8 +14,9 @@
 //   Each match is in ONE group only:
 //   5+ (t >= 5), 4+ (4 <= t < 5), 3+ (3 <= t < 4), 2+ (2 <= t < 3). Below 2 is not listed.
 //   Inside a group the order is by Score, highest first (not by t).
-//   TICK: a match gets a ✅ when (home conceded + away conceded) / (home scored + away scored)
-//   is from 0.77 to 1.3, both ends included. Exact integer maths.
+//   TICK: ratio = bigger conceded / smaller conceded (home conceded vs away conceded).
+//   A match gets a ✅ when the ratio is 1.5 or more (1.5 included). Equal = ratio 1 = no tick.
+//   Smaller = 0 and bigger > 0 gets the tick; both 0 gets none. Exact integer maths.
 // Part 1: one competition's stored pending matches (fd_fixtures).
 // Part 2: the matches pasted into the storage (one list across all leagues).
 import { createAdminClient } from '@/lib/supabase/admin';
@@ -52,7 +53,8 @@ type DrawEntry = {
 type OverItem = {
   name: string;
   tHundredths: number; // t = hs + as in hundredths, exact
-  concedeHundredths: number; // home conceded + away conceded in hundredths, exact
+  hcHundredths: number; // home conceded in hundredths, exact
+  acHundredths: number; // away conceded in hundredths, exact
   score: number;
   extra: string;
   order: number;
@@ -98,6 +100,16 @@ function rxQualifies(hs: number, hc: number, as: number, ac: number): { home: bo
     home: na > zero && nh * da >= two * na * dh,
     away: nh > zero && na * dh >= two * nh * da,
   };
+}
+
+// Exact conceded-ratio test, values in hundredths.
+// bigger / smaller >= 1.5  <=>  2 * bigger >= 3 * smaller.
+// smaller = 0 and bigger > 0 counts (unlimited ratio); both 0 does not.
+function concedeTick(hcH: number, acH: number): boolean {
+  const big = Math.max(hcH, acH);
+  const small = Math.min(hcH, acH);
+  if (small === 0) return big > 0;
+  return 2 * big >= 3 * small;
 }
 
 // True when BOTH correct-score formulas predict a draw (equal score below 5).
@@ -175,9 +187,7 @@ function drawMessages(title: string, draws: DrawEntry[]): string[] {
 }
 
 // The OVER RANKING section: one group per t band, ordered by Score inside a group.
-// A match gets a ✅ when C / T is from 0.77 to 1.3 (both included), where
-// C = home conceded + away conceded and T = home scored + away scored.
-// In hundredths (exact integers): 77 * T <= 100 * C  and  10 * C <= 13 * T.
+// A match gets a ✅ when bigger conceded / smaller conceded is 1.5 or more.
 function overMessages(title: string, items: OverItem[]): string[] {
   const bands: { label: string; min: number; max: number }[] = [
     { label: '5+', min: 500, max: Infinity },
@@ -197,9 +207,7 @@ function overMessages(title: string, items: OverItem[]): string[] {
       return;
     }
     inBand.forEach((m, i) => {
-      const c = m.concedeHundredths;
-      const t = m.tHundredths;
-      const tick = 77 * t <= 100 * c && 10 * c <= 13 * t ? ' ✅' : '';
+      const tick = concedeTick(m.hcHundredths, m.acHundredths) ? ' ✅' : '';
       const line =
         i + 1 + ') ' + m.name + tick + '\nt ' + (m.tHundredths / 100).toFixed(2) +
         ' | Score ' + m.score.toFixed(3) + (m.extra ? '\n' + m.extra : '');
@@ -330,7 +338,8 @@ export async function rankCompetition(
       overs.push({
         name: r.home_name + ' - ' + r.away_name,
         tHundredths: hundredths(hs) + hundredths(as),
-        concedeHundredths: hundredths(hc) + hundredths(ac),
+        hcHundredths: hundredths(hc),
+        acHundredths: hundredths(ac),
         score: overScore(hs, hc, as, ac),
         extra: when,
         order: i,
@@ -426,7 +435,8 @@ export function rankPasted(rows: PastedRow[]): string[] {
     overs.push({
       name: r.name,
       tHundredths: hundredths(hs) + hundredths(as),
-      concedeHundredths: hundredths(hc) + hundredths(ac),
+      hcHundredths: hundredths(hc),
+      acHundredths: hundredths(ac),
       score: overScore(hs, hc, as, ac),
       extra: league,
       order: i,
