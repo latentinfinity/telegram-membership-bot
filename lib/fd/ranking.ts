@@ -14,6 +14,8 @@
 //   Each match is in ONE group only:
 //   5+ (t >= 5), 4+ (4 <= t < 5), 3+ (3 <= t < 4), 2+ (2 <= t < 3). Below 2 is not listed.
 //   Inside a group the order is by Score, highest first (not by t).
+//   TICK: a match gets a ✅ when (home conceded + away conceded) / 2 is 60% or more of its
+//   group number (5+ -> 3.0, 4+ -> 2.4, 3+ -> 1.8, 2+ -> 1.2). Exact integer maths.
 // Part 1: one competition's stored pending matches (fd_fixtures).
 // Part 2: the matches pasted into the storage (one list across all leagues).
 import { createAdminClient } from '@/lib/supabase/admin';
@@ -50,6 +52,7 @@ type DrawEntry = {
 type OverItem = {
   name: string;
   tHundredths: number; // t = hs + as in hundredths, exact
+  concedeHundredths: number; // home conceded + away conceded in hundredths, exact
   score: number;
   extra: string;
   order: number;
@@ -172,12 +175,14 @@ function drawMessages(title: string, draws: DrawEntry[]): string[] {
 }
 
 // The OVER RANKING section: one group per t band, ordered by Score inside a group.
+// A match gets a ✅ when (home conceded + away conceded) / 2 >= 0.6 * band number.
+// In hundredths: concedeHundredths >= 120 * band number (exact integers).
 function overMessages(title: string, items: OverItem[]): string[] {
-  const bands: { label: string; min: number; max: number }[] = [
-    { label: '5+', min: 500, max: Infinity },
-    { label: '4+', min: 400, max: 500 },
-    { label: '3+', min: 300, max: 400 },
-    { label: '2+', min: 200, max: 300 },
+  const bands: { label: string; n: number; min: number; max: number }[] = [
+    { label: '5+', n: 5, min: 500, max: Infinity },
+    { label: '4+', n: 4, min: 400, max: 500 },
+    { label: '3+', n: 3, min: 300, max: 400 },
+    { label: '2+', n: 2, min: 200, max: 300 },
   ];
   const entries: string[] = [];
   let listed = 0;
@@ -191,8 +196,9 @@ function overMessages(title: string, items: OverItem[]): string[] {
       return;
     }
     inBand.forEach((m, i) => {
+      const tick = m.concedeHundredths >= 120 * b.n ? ' ✅' : '';
       const line =
-        i + 1 + ') ' + m.name + '\nt ' + (m.tHundredths / 100).toFixed(2) +
+        i + 1 + ') ' + m.name + tick + '\nt ' + (m.tHundredths / 100).toFixed(2) +
         ' | Score ' + m.score.toFixed(3) + (m.extra ? '\n' + m.extra : '');
       entries.push(i === 0 ? b.label + ' (' + inBand.length + ')\n' + line : line);
     });
@@ -321,6 +327,7 @@ export async function rankCompetition(
       overs.push({
         name: r.home_name + ' - ' + r.away_name,
         tHundredths: hundredths(hs) + hundredths(as),
+        concedeHundredths: hundredths(hc) + hundredths(ac),
         score: overScore(hs, hc, as, ac),
         extra: when,
         order: i,
@@ -416,6 +423,7 @@ export function rankPasted(rows: PastedRow[]): string[] {
     overs.push({
       name: r.name,
       tHundredths: hundredths(hs) + hundredths(as),
+      concedeHundredths: hundredths(hc) + hundredths(ac),
       score: overScore(hs, hc, as, ac),
       extra: league,
       order: i,
