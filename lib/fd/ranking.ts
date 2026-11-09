@@ -10,13 +10,10 @@
 //   when BOTH correct-score formulas (Formula 1 and Formula 2) predict a draw
 //   (an equal score below 5; 5+ against 5+ is not counted as a draw).
 // OVER RANKING section: r = ac/(1+hs) + hc/(1+as), t = hs + as,
-//   Score = (r ^ 0.85) * (t ^ 0.15). Groups are by t, compared EXACTLY (no rounding up).
-//   Each match is in ONE group only:
+//   c = hc + ac, x = c / t, Score = r + x.
+//   Groups are by t, compared EXACTLY (no rounding up). Each match is in ONE group only:
 //   5+ (t >= 5), 4+ (4 <= t < 5), 3+ (3 <= t < 4), 2+ (2 <= t < 3). Below 2 is not listed.
 //   Inside a group the order is by Score, highest first (not by t).
-//   TICK: ratio = bigger conceded / smaller conceded (home conceded vs away conceded).
-//   A match gets a ✅ when the ratio is 1.5 or more (1.5 included). Equal = ratio 1 = no tick.
-//   Smaller = 0 and bigger > 0 gets the tick; both 0 gets none. Exact integer maths.
 // Part 1: one competition's stored pending matches (fd_fixtures).
 // Part 2: the matches pasted into the storage (one list across all leagues).
 import { createAdminClient } from '@/lib/supabase/admin';
@@ -32,11 +29,13 @@ export function awayPoint(hs: number, hc: number, as: number, ac: number): numbe
   return ((as / (1 + ac)) * hc) / (1 + hs);
 }
 
-// Score = (r ^ 0.85) * (t ^ 0.15), where r = ac/(1+hs) + hc/(1+as) and t = hs + as.
+// Score = r + x, where r = ac/(1+hs) + hc/(1+as), x = c / t, c = hc + ac, t = hs + as.
 export function overScore(hs: number, hc: number, as: number, ac: number): number {
   const r = ac / (1 + hs) + hc / (1 + as);
   const t = hs + as;
-  return Math.pow(r, 0.85) * Math.pow(t, 0.15);
+  const c = hc + ac;
+  if (t <= 0) return r;
+  return r + c / t;
 }
 
 type Side = { team: string; point: number; line: string; extra: string; order: number };
@@ -53,8 +52,6 @@ type DrawEntry = {
 type OverItem = {
   name: string;
   tHundredths: number; // t = hs + as in hundredths, exact
-  hcHundredths: number; // home conceded in hundredths, exact
-  acHundredths: number; // away conceded in hundredths, exact
   score: number;
   extra: string;
   order: number;
@@ -100,16 +97,6 @@ function rxQualifies(hs: number, hc: number, as: number, ac: number): { home: bo
     home: na > zero && nh * da >= two * na * dh,
     away: nh > zero && na * dh >= two * nh * da,
   };
-}
-
-// Exact conceded-ratio test, values in hundredths.
-// bigger / smaller >= 1.5  <=>  2 * bigger >= 3 * smaller.
-// smaller = 0 and bigger > 0 counts (unlimited ratio); both 0 does not.
-function concedeTick(hcH: number, acH: number): boolean {
-  const big = Math.max(hcH, acH);
-  const small = Math.min(hcH, acH);
-  if (small === 0) return big > 0;
-  return 2 * big >= 3 * small;
 }
 
 // True when BOTH correct-score formulas predict a draw (equal score below 5).
@@ -187,7 +174,6 @@ function drawMessages(title: string, draws: DrawEntry[]): string[] {
 }
 
 // The OVER RANKING section: one group per t band, ordered by Score inside a group.
-// A match gets a ✅ when bigger conceded / smaller conceded is 1.5 or more.
 function overMessages(title: string, items: OverItem[]): string[] {
   const bands: { label: string; min: number; max: number }[] = [
     { label: '5+', min: 500, max: Infinity },
@@ -207,9 +193,8 @@ function overMessages(title: string, items: OverItem[]): string[] {
       return;
     }
     inBand.forEach((m, i) => {
-      const tick = concedeTick(m.hcHundredths, m.acHundredths) ? ' ✅' : '';
       const line =
-        i + 1 + ') ' + m.name + tick + '\nt ' + (m.tHundredths / 100).toFixed(2) +
+        i + 1 + ') ' + m.name + '\nt ' + (m.tHundredths / 100).toFixed(2) +
         ' | Score ' + m.score.toFixed(3) + (m.extra ? '\n' + m.extra : '');
       entries.push(i === 0 ? b.label + ' (' + inBand.length + ')\n' + line : line);
     });
@@ -338,8 +323,6 @@ export async function rankCompetition(
       overs.push({
         name: r.home_name + ' - ' + r.away_name,
         tHundredths: hundredths(hs) + hundredths(as),
-        hcHundredths: hundredths(hc),
-        acHundredths: hundredths(ac),
         score: overScore(hs, hc, as, ac),
         extra: when,
         order: i,
@@ -435,8 +418,6 @@ export function rankPasted(rows: PastedRow[]): string[] {
     overs.push({
       name: r.name,
       tHundredths: hundredths(hs) + hundredths(as),
-      hcHundredths: hundredths(hc),
-      acHundredths: hundredths(ac),
       score: overScore(hs, hc, as, ac),
       extra: league,
       order: i,
