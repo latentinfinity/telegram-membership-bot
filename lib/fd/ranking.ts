@@ -9,8 +9,8 @@
 //   both ends included (exact integer maths). Closest first. A match also gets a tick
 //   when BOTH correct-score formulas (Formula 1 and Formula 2) predict a draw
 //   (an equal score below 5; 5+ against 5+ is not counted as a draw).
-// OVER RANKING section: r = ac/(1+hs) + hc/(1+as), t = hs + as,
-//   c = hc + ac, x = c / t, Score = r + x.
+// OVER RANKING section: r = ac/(1+hs) + hc/(1+as), t = hs + as, c = hc + ac,
+//   Score = (r ^ 0.85) * (c ^ 0.15).
 //   Groups are by t, compared EXACTLY (no rounding up). Each match is in ONE group only:
 //   5+ (t >= 5), 4+ (4 <= t < 5), 3+ (3 <= t < 4), 2+ (2 <= t < 3). Below 2 is not listed.
 //   Inside a group the order is by Score, highest first (not by t).
@@ -29,13 +29,11 @@ export function awayPoint(hs: number, hc: number, as: number, ac: number): numbe
   return ((as / (1 + ac)) * hc) / (1 + hs);
 }
 
-// Score = r + x, where r = ac/(1+hs) + hc/(1+as), x = c / t, c = hc + ac, t = hs + as.
+// Score = (r ^ 0.85) * (c ^ 0.15), where r = ac/(1+hs) + hc/(1+as) and c = hc + ac.
 export function overScore(hs: number, hc: number, as: number, ac: number): number {
   const r = ac / (1 + hs) + hc / (1 + as);
-  const t = hs + as;
   const c = hc + ac;
-  if (t <= 0) return r;
-  return r + c / t;
+  return Math.pow(r, 0.85) * Math.pow(c, 0.15);
 }
 
 type Side = { team: string; point: number; line: string; extra: string; order: number };
