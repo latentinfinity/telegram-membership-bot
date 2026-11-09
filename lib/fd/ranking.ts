@@ -33,7 +33,7 @@ export function awayPoint(hs: number, hc: number, as: number, ac: number): numbe
 export function overScore(hs: number, hc: number, as: number, ac: number): number {
   const c = hc + ac;
   const t = hs + as;
-  const hi = Math.max(c, t);
+  const hi = Math.max(c, t) + 1;
   const lo = Math.min(c, t);
   const ratio = hi > 0 ? lo / hi : 0;
   return ac / (1 + hs) + hc / (1 + as) + ratio;
