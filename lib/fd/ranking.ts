@@ -10,7 +10,7 @@
 //   when BOTH correct-score formulas (Formula 1 and Formula 2) predict a draw
 //   (an equal score below 5; 5+ against 5+ is not counted as a draw).
 // OVER RANKING section: c = hc + ac, t = hs + as,
-//   r = ac/(1+hs) + hc/(1+as) + min(c,t)/max(c,t), Score = r.
+//   r = ac/(1+hs) + hc/(1+as) + c/(t+1), Score = r.
 //   Groups are by t, compared EXACTLY (no rounding up). Each match is in ONE group only:
 //   5+ (t >= 5), 4+ (4 <= t < 5), 3+ (3 <= t < 4), 2+ (2 <= t < 3). Below 2 is not listed.
 //   Inside a group the order is by Score, highest first (not by t).
@@ -29,14 +29,11 @@ export function awayPoint(hs: number, hc: number, as: number, ac: number): numbe
   return ((as / (1 + ac)) * hc) / (1 + hs);
 }
 
-// Score = r = ac/(1+hs) + hc/(1+as) + min(c,t)/max(c,t), c = hc + ac, t = hs + as.
+// Score = r = ac/(1+hs) + hc/(1+as) + c/(t+1), c = hc + ac, t = hs + as.
 export function overScore(hs: number, hc: number, as: number, ac: number): number {
   const c = hc + ac;
   const t = hs + as;
-  const hi = Math.max(c, t);
-  const lo = Math.min(c, t);
-  const ratio = hi > 0 ? lo / hi  : 0;
-  return ac / (1 + hs) + hc / (1 + as) + ratio;
+  return ac / (1 + hs) + hc / (1 + as) + c / (t + 1);
 }
 
 type Side = { team: string; point: number; line: string; extra: string; order: number };
