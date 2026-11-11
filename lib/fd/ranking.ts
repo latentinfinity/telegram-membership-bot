@@ -1,7 +1,8 @@
 // lib/fd/ranking.ts  (REPLACES the earlier version) - Rankings. Read only. Private chat only.
 // Home point = ((hs / (1 + hc)) * ac) / (1 + as)
 // Away point = ((as / (1 + ac)) * hc) / (1 + hs)
-// Every side gets its own point; all sides go in ONE list, highest first.
+// Every side gets its own point; sides go in ONE list, highest first.
+//   Only the top N sides are shown, where N = the number of matches (20 matches -> top 20).
 // RX 2+ section (after the main list, before DRAW): Home rx = Home point / Away point,
 //   Away rx = Away point / Home point. A side qualifies when its rx is 2 or more
 //   (exact integer maths). If the opposing point is 0 the side is eliminated.
@@ -9,17 +10,19 @@
 //   both ends included (exact integer maths). Closest first. A match also gets a tick
 //   when BOTH correct-score formulas (Formula 1 and Formula 2) predict a draw
 //   (an equal score below 5; 5+ against 5+ is not counted as a draw).
-// OVER RANKING section: c = hc + ac, t = hs + as,
-//   r = ac/(1+hs) + hc/(1+as) + c/(t+1), Score = r.
+// OVER RANKING section: r = ac/(1+hs) + hc/(1+as), t = hs + as, Score = r.
 //   Groups are by t, compared EXACTLY (no rounding up). Each match is in ONE group only:
-//   5+ (t >= 5), 4+ (4 <= t < 5), 3+ (3 <= t < 4), 2+ (2 <= t < 3). Below 2 is not listed.
+//   5+ (t >= 5), 4+ (4 <= t < 5), 3+ (3 <= t < 4). Below 3 is not listed (2+ removed).
 //   Inside a group the order is by Score, highest first (not by t).
+// OVER RANKING 2 section (after OVER RANKING): q = (ac/(1+hs)) / (hc/(1+as)),
+//   Score = r + q (q = 0 when hc = 0). Same groups, but only the top 20 of each group.
 // Part 1: one competition's stored pending matches (fd_fixtures).
 // Part 2: the matches pasted into the storage (one list across all leagues).
 import { createAdminClient } from '@/lib/supabase/admin';
 import { calibratedScores } from '@/lib/correctScore';
 
 const LIMIT = 3500;
+const OVER2_TOP = 20;
 
 export function homePoint(hs: number, hc: number, as: number, ac: number): number {
   return ((hs / (1 + hc)) * ac) / (1 + as);
@@ -29,11 +32,17 @@ export function awayPoint(hs: number, hc: number, as: number, ac: number): numbe
   return ((as / (1 + ac)) * hc) / (1 + hs);
 }
 
-// Score = r = ac/(1+hs) + hc/(1+as) + c/(t+1), c = hc + ac, t = hs + as.
+// Score = r = ac/(1+hs) + hc/(1+as).
 export function overScore(hs: number, hc: number, as: number, ac: number): number {
-  const c = hc + ac;
-  const t = hs + as;
-  return ac / (1 + hs) + hc / (1 + as) + c / (t + 1);
+  return ac / (1 + hs) + hc / (1 + as);
+}
+
+// Score 2 = r + q, where q = (ac/(1+hs)) / (hc/(1+as)). q = 0 when hc = 0.
+export function overScore2(hs: number, hc: number, as: number, ac: number): number {
+  const r = overScore(hs, hc, as, ac);
+  const bottom = hc / (1 + as);
+  const q = bottom > 0 ? ac / (1 + hs) / bottom : 0;
+  return r + q;
 }
 
 type Side = { team: string; point: number; line: string; extra: string; order: number };
@@ -51,6 +60,7 @@ type OverItem = {
   name: string;
   tHundredths: number; // t = hs + as in hundredths, exact
   score: number;
+  score2: number;
   extra: string;
   order: number;
 };
@@ -139,8 +149,13 @@ function pack(header: string, entries: string[], footer: string): string[] {
   return messages;
 }
 
+// Highest sides first. Only the top N are returned, N = the number of matches (sides / 2).
 function rankedEntries(sides: Side[]): string[] {
-  const sorted = sides.slice().sort((a, b) => b.point - a.point || a.order - b.order);
+  const top = Math.floor(sides.length / 2);
+  const sorted = sides
+    .slice()
+    .sort((a, b) => b.point - a.point || a.order - b.order)
+    .slice(0, top);
   return sorted.map(
     (s, i) => i + 1 + ') ' + s.team + '   ' + s.point.toFixed(3) + '\n' + s.line + (s.extra ? '\n' + s.extra : '')
   );
@@ -171,35 +186,44 @@ function drawMessages(title: string, draws: DrawEntry[]): string[] {
   return pack(header, entries, '');
 }
 
-// The OVER RANKING section: one group per t band, ordered by Score inside a group.
-function overMessages(title: string, items: OverItem[]): string[] {
+// The OVER RANKING sections: one group per t band (5+, 4+, 3+), ordered by Score inside a group.
+//   plus = false: the normal rank (Score = r), every match listed.
+//   plus = true:  the second rank (Score = r + q), top 20 of each group only.
+function overMessages(title: string, items: OverItem[], plus: boolean): string[] {
   const bands: { label: string; min: number; max: number }[] = [
     { label: '5+', min: 500, max: Infinity },
     { label: '4+', min: 400, max: 500 },
     { label: '3+', min: 300, max: 400 },
-    { label: '2+', min: 200, max: 300 },
   ];
   const entries: string[] = [];
-  let listed = 0;
+  let shown = 0;
+  let inGroups = 0;
   bands.forEach((b) => {
-    const inBand = items
+    const all = items
       .filter((x) => x.tHundredths >= b.min && x.tHundredths < b.max)
-      .sort((a, c) => c.score - a.score || a.order - c.order);
-    listed += inBand.length;
+      .sort((a, c) =>
+        plus ? c.score2 - a.score2 || a.order - c.order : c.score - a.score || a.order - c.order
+      );
+    inGroups += all.length;
+    const inBand = plus ? all.slice(0, OVER2_TOP) : all;
+    shown += inBand.length;
     if (inBand.length === 0) {
       entries.push(b.label + ' (0)\nNone');
       return;
     }
+    const count = plus && all.length > inBand.length ? inBand.length + ' of ' + all.length : String(inBand.length);
     inBand.forEach((m, i) => {
+      const value = plus ? m.score2 : m.score;
       const line =
         i + 1 + ') ' + m.name + '\nt ' + (m.tHundredths / 100).toFixed(2) +
-        ' | Score ' + m.score.toFixed(3) + (m.extra ? '\n' + m.extra : '');
-      entries.push(i === 0 ? b.label + ' (' + inBand.length + ')\n' + line : line);
+        ' | Score ' + value.toFixed(3) + (m.extra ? '\n' + m.extra : '');
+      entries.push(i === 0 ? b.label + ' (' + count + ')\n' + line : line);
     });
   });
-  const below = items.length - listed;
-  const footer = below > 0 ? below + ' match(es) with t below 2.00 are not listed.' : '';
-  return pack('OVER RANKING - ' + title + ' (' + listed + ')', entries, footer);
+  const below = items.length - inGroups;
+  const footer = !plus && below > 0 ? below + ' match(es) with t below 3.00 are not listed.' : '';
+  const head = plus ? 'OVER RANKING 2 (r + q, top 20 per group) - ' : 'OVER RANKING - ';
+  return pack(head + title + ' (' + shown + ')', entries, footer);
 }
 
 // ── Part 1: football-data competitions ────────────────────────────────────
@@ -322,6 +346,7 @@ export async function rankCompetition(
         name: r.home_name + ' - ' + r.away_name,
         tHundredths: hundredths(hs) + hundredths(as),
         score: overScore(hs, hc, as, ac),
+        score2: overScore2(hs, hc, as, ac),
         extra: when,
         order: i,
       });
@@ -330,14 +355,16 @@ export async function rankCompetition(
     const footerParts: string[] = [];
     if (notRanked.length > 0) footerParts.push('NOT RANKED:\n' + notRanked.join('\n'));
     footerParts.push('Rule-based order from the formula. No accuracy is promised.');
-    const header = 'RANKING - ' + name + ' (' + sides.length + ' sides)';
+    const top = Math.floor(sides.length / 2);
+    const header = 'RANKING - ' + name + ' (top ' + top + ' of ' + sides.length + ' sides)';
     if (sides.length === 0) {
       return { ok: true, messages: [header + '\n\nNo stored match has averages yet.\n\n' + footerParts.join('\n\n')] };
     }
     const messages = pack(header, rankedEntries(sides), footerParts.join('\n\n'))
       .concat(rxMessages(name, rxItems))
       .concat(drawMessages(name, draws))
-      .concat(overMessages(name, overs));
+      .concat(overMessages(name, overs, false))
+      .concat(overMessages(name, overs, true));
     return { ok: true, messages };
   } catch (e) {
     console.error('rank competition failed');
@@ -417,6 +444,7 @@ export function rankPasted(rows: PastedRow[]): string[] {
       name: r.name,
       tHundredths: hundredths(hs) + hundredths(as),
       score: overScore(hs, hc, as, ac),
+      score2: overScore2(hs, hc, as, ac),
       extra: league,
       order: i,
     });
@@ -425,12 +453,14 @@ export function rankPasted(rows: PastedRow[]): string[] {
   const footerParts: string[] = [];
   if (unreadable.length > 0) footerParts.push('Could not read: ' + unreadable.join(', '));
   footerParts.push('Rule-based order from the formula. No accuracy is promised.');
-  const header = 'RANKING - pasted matches (' + sides.length + ' sides)';
+  const top = Math.floor(sides.length / 2);
+  const header = 'RANKING - pasted matches (top ' + top + ' of ' + sides.length + ' sides)';
   if (sides.length === 0) {
     return [header + '\n\nNo stored match could be read.\n\n' + footerParts.join('\n\n')];
   }
   return pack(header, rankedEntries(sides), footerParts.join('\n\n'))
     .concat(rxMessages('pasted matches', rxItems))
     .concat(drawMessages('pasted matches', draws))
-    .concat(overMessages('pasted matches', overs));
+    .concat(overMessages('pasted matches', overs, false))
+    .concat(overMessages('pasted matches', overs, true));
 }
