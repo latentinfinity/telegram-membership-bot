@@ -3,26 +3,27 @@
 // Away point = ((as / (1 + ac)) * hc) / (1 + hs)
 // Every side gets its own point; sides go in ONE list, highest first.
 //   Only the top N sides are shown, where N = the number of matches (20 matches -> top 20).
+// SUPPORTING FORMULA: X = hs/hc + ac/as (Home), Y = as/ac + hc/hs (Away), D2 = |X - Y|.
+//   If hs, hc, as or ac is 0 there is no supporting result (no tick, tag shows "-").
+//   Exact integer maths (X = N/(hc*as), Y = N/(ac*hs), N = hs*as + ac*hc).
 // RX 2+ section (after the main list, before DRAW): Home rx = Home point / Away point,
 //   Away rx = Away point / Home point. A side qualifies when its rx is 2 or more
 //   (exact integer maths). If the opposing point is 0 the side is eliminated.
-// DRAW section: a match qualifies when |Home point - Away point| is between 0.0 and 0.2,
-//   both ends included (exact integer maths). Closest first. A match also gets a tick
-//   when BOTH correct-score formulas (Formula 1 and Formula 2) predict a draw
-//   (an equal score below 5; 5+ against 5+ is not counted as a draw).
-// OVER RANKING section: r = ac/(1+hs) + hc/(1+as), t = hs + as, Score = r.
+//   A side gets a tick when D2 >= 3 (3 included).
+// DRAW section: a match qualifies when |Home point - Away point| (main D) is between 0.0 and 0.2,
+//   both ends included (exact integer maths). Closest first. A match gets a tick only when
+//   BOTH the main D and D2 are between 0 and 0.2 (included). Each match shows the tag
+//   (main stronger, supporting stronger), e.g. (Home, Away).
+// OVER RANKING section: X = 2*hs*ac/(hs+ac), Y = 2*as*hc/(as+hc), Score = S = X + Y
+//   (a zero denominator makes that part 0). t = hs + as.
 //   Groups are by t, compared EXACTLY (no rounding up). Each match is in ONE group only:
-//   5+ (t >= 5), 4+ (4 <= t < 5), 3+ (3 <= t < 4). Below 3 is not listed (2+ removed).
+//   5+ (t >= 5), 4+ (4 <= t < 5), 3+ (3 <= t < 4). Below 3 is not listed.
 //   Inside a group the order is by Score, highest first (not by t).
-// OVER RANKING 2 section (after OVER RANKING): q = (ac/(1+hs)) / (hc/(1+as)),
-//   Score = r + q (q = 0 when hc = 0). Same groups, but only the top 20 of each group.
 // Part 1: one competition's stored pending matches (fd_fixtures).
 // Part 2: the matches pasted into the storage (one list across all leagues).
 import { createAdminClient } from '@/lib/supabase/admin';
-import { calibratedScores } from '@/lib/correctScore';
 
 const LIMIT = 3500;
-const OVER2_TOP = 20;
 
 export function homePoint(hs: number, hc: number, as: number, ac: number): number {
   return ((hs / (1 + hc)) * ac) / (1 + as);
@@ -32,27 +33,22 @@ export function awayPoint(hs: number, hc: number, as: number, ac: number): numbe
   return ((as / (1 + ac)) * hc) / (1 + hs);
 }
 
-// Score = r = ac/(1+hs) + hc/(1+as).
+// Score S = X + Y, X = 2*hs*ac/(hs+ac), Y = 2*as*hc/(as+hc). A zero denominator gives 0.
 export function overScore(hs: number, hc: number, as: number, ac: number): number {
-  return ac / (1 + hs) + hc / (1 + as);
-}
-
-// Score 2 = r + q, where q = (ac/(1+hs)) / (hc/(1+as)). q = 0 when hc = 0.
-export function overScore2(hs: number, hc: number, as: number, ac: number): number {
-  const r = overScore(hs, hc, as, ac);
-  const bottom = hc / (1 + as);
-  const q = bottom > 0 ? ac / (1 + hs) / bottom : 0;
-  return r + q;
+  const x = hs + ac > 0 ? (2 * hs * ac) / (hs + ac) : 0;
+  const y = as + hc > 0 ? (2 * as * hc) / (as + hc) : 0;
+  return x + y;
 }
 
 type Side = { team: string; point: number; line: string; extra: string; order: number };
-type RxItem = { team: string; rx: number; line: string; extra: string; order: number };
+type RxItem = { team: string; rx: number; tick: boolean; line: string; extra: string; order: number };
 type DrawEntry = {
   label: string;
   home: number;
   away: number;
   diff: number;
   tick: boolean;
+  tag: string;
   extra: string;
   order: number;
 };
@@ -60,7 +56,6 @@ type OverItem = {
   name: string;
   tHundredths: number; // t = hs + as in hundredths, exact
   score: number;
-  score2: number;
   extra: string;
   order: number;
 };
@@ -89,6 +84,18 @@ function isDraw(hs: number, hc: number, as: number, ac: number): boolean {
   return B(5) * cross <= dh * da;
 }
 
+// Which side the main formula favours: Home if Home point > Away point, else Away.
+// Exact: Nh/Dh > Na/Da  <=>  Nh*Da > Na*Dh.
+function mainStronger(hs: number, hc: number, as: number, ac: number): 'Home' | 'Away' {
+  const B = (n: number) => BigInt(n);
+  const hundred = B(100);
+  const nh = B(hs) * B(ac);
+  const dh = (hundred + B(hc)) * (hundred + B(as));
+  const na = B(as) * B(hc);
+  const da = (hundred + B(ac)) * (hundred + B(hs));
+  return nh * da > na * dh ? 'Home' : 'Away';
+}
+
 // Exact RX test with the four averages in hundredths.
 //   Home rx = Hp / Ap >= 2  <=>  Nh*Da >= 2*Na*Dh, and needs Ap > 0 (Na > 0)
 //   Away rx = Ap / Hp >= 2  <=>  Na*Dh >= 2*Nh*Da, and needs Hp > 0 (Nh > 0)
@@ -107,13 +114,23 @@ function rxQualifies(hs: number, hc: number, as: number, ac: number): { home: bo
   };
 }
 
-// True when BOTH correct-score formulas predict a draw (equal score below 5).
-function bothFormulasDraw(hs: number, hc: number, as: number, ac: number): boolean {
-  const s = calibratedScores(hs.toFixed(2), hc.toFixed(2), as.toFixed(2), ac.toFixed(2));
-  if (!s) return false;
-  const prodDraw = s.prod.home === s.prod.away && s.prod.home < 5;
-  const expDraw = s.exp.home === s.exp.away && s.exp.home < 5;
-  return prodDraw && expDraw;
+// Supporting formula, exact, averages in hundredths.
+//   X = hs/hc + ac/as = N / (hc*as),  Y = as/ac + hc/hs = N / (ac*hs),  N = hs*as + ac*hc
+//   D2 = |X - Y| = N * |ac*hs - hc*as| / (hc*as*ac*hs)
+//   Returns null when hs, hc, as or ac is 0.
+type Support = { small: boolean; big: boolean; stronger: 'Home' | 'Away' };
+function support(hs: number, hc: number, as: number, ac: number): Support | null {
+  if (hs <= 0 || hc <= 0 || as <= 0 || ac <= 0) return null;
+  const B = (n: number) => BigInt(n);
+  const n = B(hs) * B(as) + B(ac) * B(hc);
+  const diff = B(ac) * B(hs) - B(hc) * B(as);
+  const absDiff = diff < B(0) ? -diff : diff;
+  const den = B(hc) * B(as) * B(ac) * B(hs);
+  return {
+    small: B(5) * n * absDiff <= den, // D2 <= 0.2
+    big: n * absDiff >= B(3) * den, // D2 >= 3
+    stronger: diff > B(0) ? 'Home' : 'Away', // X > Y <=> ac*hs > hc*as
+  };
 }
 
 function kickoff(iso: string): string {
@@ -161,13 +178,15 @@ function rankedEntries(sides: Side[]): string[] {
   );
 }
 
-// The RX 2+ section: one descending list, highest rx first.
+// The RX 2+ section: one descending list, highest rx first. Tick when D2 >= 3.
 function rxMessages(title: string, items: RxItem[]): string[] {
   const header = 'RX 2+ - ' + title + ' (' + items.length + ')';
   if (items.length === 0) return [header + '\nNone'];
   const sorted = items.slice().sort((a, b) => b.rx - a.rx || a.order - b.order);
   const entries = sorted.map(
-    (x, i) => i + 1 + ') ' + x.team + '   rx ' + x.rx.toFixed(3) + '\n' + x.line + (x.extra ? '\n' + x.extra : '')
+    (x, i) =>
+      i + 1 + ') ' + x.team + (x.tick ? ' ✅' : '') + '   rx ' + x.rx.toFixed(3) +
+      '\n' + x.line + (x.extra ? '\n' + x.extra : '')
   );
   return pack(header, entries, '');
 }
@@ -179,51 +198,49 @@ function drawMessages(title: string, draws: DrawEntry[]): string[] {
   const sorted = draws.slice().sort((a, b) => a.diff - b.diff || a.order - b.order);
   const entries = sorted.map(
     (d, i) =>
-      i + 1 + ') ' + d.label + (d.tick ? ' ✅' : '') +
+      i + 1 + ') ' + d.label + (d.tick ? ' ✅' : '') + ' ' + d.tag +
       '\nHome ' + d.home.toFixed(3) + ' | Away ' + d.away.toFixed(3) +
       ' | difference ' + d.diff.toFixed(3) + (d.extra ? '\n' + d.extra : '')
   );
   return pack(header, entries, '');
 }
 
-// The OVER RANKING sections: one group per t band (5+, 4+, 3+), ordered by Score inside a group.
-//   plus = false: the normal rank (Score = r), every match listed.
-//   plus = true:  the second rank (Score = r + q), top 20 of each group only.
-function overMessages(title: string, items: OverItem[], plus: boolean): string[] {
+// The OVER RANKING section: one group per t band (5+, 4+, 3+), ordered by Score inside a group.
+function overMessages(title: string, items: OverItem[]): string[] {
   const bands: { label: string; min: number; max: number }[] = [
     { label: '5+', min: 500, max: Infinity },
     { label: '4+', min: 400, max: 500 },
     { label: '3+', min: 300, max: 400 },
   ];
   const entries: string[] = [];
-  let shown = 0;
-  let inGroups = 0;
+  let listed = 0;
   bands.forEach((b) => {
-    const all = items
+    const inBand = items
       .filter((x) => x.tHundredths >= b.min && x.tHundredths < b.max)
-      .sort((a, c) =>
-        plus ? c.score2 - a.score2 || a.order - c.order : c.score - a.score || a.order - c.order
-      );
-    inGroups += all.length;
-    const inBand = plus ? all.slice(0, OVER2_TOP) : all;
-    shown += inBand.length;
+      .sort((a, c) => c.score - a.score || a.order - c.order);
+    listed += inBand.length;
     if (inBand.length === 0) {
       entries.push(b.label + ' (0)\nNone');
       return;
     }
-    const count = plus && all.length > inBand.length ? inBand.length + ' of ' + all.length : String(inBand.length);
     inBand.forEach((m, i) => {
-      const value = plus ? m.score2 : m.score;
       const line =
         i + 1 + ') ' + m.name + '\nt ' + (m.tHundredths / 100).toFixed(2) +
-        ' | Score ' + value.toFixed(3) + (m.extra ? '\n' + m.extra : '');
-      entries.push(i === 0 ? b.label + ' (' + count + ')\n' + line : line);
+        ' | Score ' + m.score.toFixed(3) + (m.extra ? '\n' + m.extra : '');
+      entries.push(i === 0 ? b.label + ' (' + inBand.length + ')\n' + line : line);
     });
   });
-  const below = items.length - inGroups;
-  const footer = !plus && below > 0 ? below + ' match(es) with t below 3.00 are not listed.' : '';
-  const head = plus ? 'OVER RANKING 2 (r + q, top 20 per group) - ' : 'OVER RANKING - ';
-  return pack(head + title + ' (' + shown + ')', entries, footer);
+  const below = items.length - listed;
+  const footer = below > 0 ? below + ' match(es) with t below 3.00 are not listed.' : '';
+  return pack('OVER RANKING - ' + title + ' (' + listed + ')', entries, footer);
+}
+
+// Builds the draw tag and tick for one match (averages already in hundredths).
+function drawInfo(hsH: number, hcH: number, asH: number, acH: number): { tick: boolean; tag: string } {
+  const sup = support(hsH, hcH, asH, acH);
+  const main = mainStronger(hsH, hcH, asH, acH);
+  const tick = sup !== null && sup.small && isDraw(hsH, hcH, asH, acH);
+  return { tick, tag: '(' + main + ', ' + (sup ? sup.stronger : '-') + ')' };
 }
 
 // ── Part 1: football-data competitions ────────────────────────────────────
@@ -307,6 +324,10 @@ export async function rankCompetition(
         notRanked.push(r.home_name + ' - ' + r.away_name + ': unreadable averages');
         return;
       }
+      const hsH = hundredths(hs);
+      const hcH = hundredths(hc);
+      const asH = hundredths(as);
+      const acH = hundredths(ac);
       const when = kickoff(r.match_date);
       const hp = homePoint(hs, hc, as, ac);
       const ap = awayPoint(hs, hc, as, ac);
@@ -324,29 +345,32 @@ export async function rankCompetition(
         extra: when,
         order: i * 2 + 1,
       });
-      const q = rxQualifies(hundredths(hs), hundredths(hc), hundredths(as), hundredths(ac));
+      const q = rxQualifies(hsH, hcH, asH, acH);
+      const sup = support(hsH, hcH, asH, acH);
+      const rxTick = sup !== null && sup.big;
       if (q.home) {
-        rxItems.push({ team: r.home_name, rx: hp / ap, line: 'Home vs ' + r.away_name, extra: when, order: i * 2 });
+        rxItems.push({ team: r.home_name, rx: hp / ap, tick: rxTick, line: 'Home vs ' + r.away_name, extra: when, order: i * 2 });
       }
       if (q.away) {
-        rxItems.push({ team: r.away_name, rx: ap / hp, line: 'Away at ' + r.home_name, extra: when, order: i * 2 + 1 });
+        rxItems.push({ team: r.away_name, rx: ap / hp, tick: rxTick, line: 'Away at ' + r.home_name, extra: when, order: i * 2 + 1 });
       }
-      if (isDraw(hundredths(hs), hundredths(hc), hundredths(as), hundredths(ac))) {
+      if (isDraw(hsH, hcH, asH, acH)) {
+        const info = drawInfo(hsH, hcH, asH, acH);
         draws.push({
           label: r.home_name + ' - ' + r.away_name,
           home: hp,
           away: ap,
           diff: Math.abs(hp - ap),
-          tick: bothFormulasDraw(hs, hc, as, ac),
+          tick: info.tick,
+          tag: info.tag,
           extra: when,
           order: i,
         });
       }
       overs.push({
         name: r.home_name + ' - ' + r.away_name,
-        tHundredths: hundredths(hs) + hundredths(as),
+        tHundredths: hsH + asH,
         score: overScore(hs, hc, as, ac),
-        score2: overScore2(hs, hc, as, ac),
         extra: when,
         order: i,
       });
@@ -363,8 +387,7 @@ export async function rankCompetition(
     const messages = pack(header, rankedEntries(sides), footerParts.join('\n\n'))
       .concat(rxMessages(name, rxItems))
       .concat(drawMessages(name, draws))
-      .concat(overMessages(name, overs, false))
-      .concat(overMessages(name, overs, true));
+      .concat(overMessages(name, overs));
     return { ok: true, messages };
   } catch (e) {
     console.error('rank competition failed');
@@ -402,6 +425,10 @@ export function rankPasted(rows: PastedRow[]): string[] {
       return;
     }
     const [hs, hc, as, ac] = nums.map(round2);
+    const hsH = hundredths(hs);
+    const hcH = hundredths(hc);
+    const asH = hundredths(as);
+    const acH = hundredths(ac);
     const teams = splitTeams(r.name);
     const homeName = teams ? teams.home : 'Home team of ' + r.name;
     const awayName = teams ? teams.away : 'Away team of ' + r.name;
@@ -422,29 +449,32 @@ export function rankPasted(rows: PastedRow[]): string[] {
       extra: league,
       order: i * 2 + 1,
     });
-    const q = rxQualifies(hundredths(hs), hundredths(hc), hundredths(as), hundredths(ac));
+    const q = rxQualifies(hsH, hcH, asH, acH);
+    const sup = support(hsH, hcH, asH, acH);
+    const rxTick = sup !== null && sup.big;
     if (q.home) {
-      rxItems.push({ team: homeName, rx: hp / ap, line: 'Home vs ' + awayName, extra: league, order: i * 2 });
+      rxItems.push({ team: homeName, rx: hp / ap, tick: rxTick, line: 'Home vs ' + awayName, extra: league, order: i * 2 });
     }
     if (q.away) {
-      rxItems.push({ team: awayName, rx: ap / hp, line: 'Away at ' + homeName, extra: league, order: i * 2 + 1 });
+      rxItems.push({ team: awayName, rx: ap / hp, tick: rxTick, line: 'Away at ' + homeName, extra: league, order: i * 2 + 1 });
     }
-    if (isDraw(hundredths(hs), hundredths(hc), hundredths(as), hundredths(ac))) {
+    if (isDraw(hsH, hcH, asH, acH)) {
+      const info = drawInfo(hsH, hcH, asH, acH);
       draws.push({
         label: r.name,
         home: hp,
         away: ap,
         diff: Math.abs(hp - ap),
-        tick: bothFormulasDraw(hs, hc, as, ac),
+        tick: info.tick,
+        tag: info.tag,
         extra: league,
         order: i,
       });
     }
     overs.push({
       name: r.name,
-      tHundredths: hundredths(hs) + hundredths(as),
+      tHundredths: hsH + asH,
       score: overScore(hs, hc, as, ac),
-      score2: overScore2(hs, hc, as, ac),
       extra: league,
       order: i,
     });
@@ -461,6 +491,5 @@ export function rankPasted(rows: PastedRow[]): string[] {
   return pack(header, rankedEntries(sides), footerParts.join('\n\n'))
     .concat(rxMessages('pasted matches', rxItems))
     .concat(drawMessages('pasted matches', draws))
-    .concat(overMessages('pasted matches', overs, false))
-    .concat(overMessages('pasted matches', overs, true));
+    .concat(overMessages('pasted matches', overs));
 }
