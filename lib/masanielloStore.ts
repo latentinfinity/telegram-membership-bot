@@ -2,19 +2,21 @@
 // MASANIELLO STORE — database access for cycles and tickets.
 // Service-role client only (same pattern as the rest of the bot).
 // Never throws: callers get { ok:false, error } or null instead.
+// The target return is FIXED per cycle (starting bankroll / V(N,K)).
 // ═══════════════════════════════════════════════════════════════
 
 import { createAdminClient } from '@/lib/supabase/admin';
 import {
   CycleState,
   CycleStatus,
+  FixedTarget,
   SettleResult,
   cycleStatus,
+  fixedTargetKobo,
   formatNaira,
   initialState,
   planStake,
   settle,
-  targetReturnKobo,
   validateConfig,
 } from '@/lib/masaniello';
 
@@ -66,6 +68,20 @@ export function cycleToState(c: MasCycle): CycleState {
     betsLeft: c.bets_left,
     winsNeeded: c.wins_needed,
   };
+}
+
+// What fixes this cycle's target (never changes after the cycle starts).
+function fixedOf(c: MasCycle): FixedTarget {
+  return {
+    initialBankrollKobo: Number(c.initial_bankroll_kobo),
+    totalBets: c.total_bets,
+    winsRequired: c.wins_required,
+  };
+}
+
+// The cycle's FIXED target return in kobo.
+function targetOf(c: MasCycle): number {
+  return fixedTargetKobo(fixedOf(c), c.ref_odds_h);
 }
 
 export async function getActiveCycle(): Promise<MasCycle | null> {
@@ -186,7 +202,7 @@ export async function createTicket(
   }
 
   const state = cycleToState(cycle);
-  const plan = planStake(state, oddsH, cycle.ref_odds_h);
+  const plan = planStake(state, oddsH, cycle.ref_odds_h, fixedOf(cycle));
   if (plan.status !== 'OK' && plan.status !== 'CAPPED') {
     return { ok: false, error: plan.message };
   }
@@ -431,9 +447,7 @@ function settlementSummary(
   } else {
     lines.push('Bets left: ' + next.betsLeft + ' of ' + cycle.total_bets);
     lines.push('Wins needed: ' + next.winsNeeded + ' of ' + cycle.wins_required);
-    lines.push(
-      'Projected return now: ' + formatNaira(targetReturnKobo(next, cycle.ref_odds_h))
-    );
+    lines.push('Target return (fixed): ' + formatNaira(targetOf(cycle)));
     lines.push('');
     lines.push('Ready for the next ticket.');
   }
@@ -468,9 +482,8 @@ export function cycleDashboard(c: MasCycle): string {
   lines.push('Reference odds: ' + (c.ref_odds_h / 100).toFixed(2));
 
   if (c.status === 'active' && cycleStatus(state) === 'ACTIVE') {
-    const target = targetReturnKobo(state, c.ref_odds_h);
-    lines.push('Target return: ' + formatNaira(target));
-    const p = planStake(state, c.ref_odds_h, c.ref_odds_h);
+    lines.push('Target return (fixed): ' + formatNaira(targetOf(c)));
+    const p = planStake(state, c.ref_odds_h, c.ref_odds_h, fixedOf(c));
     if (p.stakeKobo > 0) {
       lines.push(
         'If the next ticket is at ' +
@@ -493,7 +506,7 @@ export function ticketCard(c: MasCycle, t: MasTicket): string {
   const stake = Number(t.stake_kobo);
   const win = settle(state, 'win', stake, t.odds_h);
   const loss = settle(state, 'loss', stake, t.odds_h);
-  const target = targetReturnKobo(state, c.ref_odds_h);
+  const target = targetOf(c);
   const betNo = c.total_bets - c.bets_left + 1;
 
   const winTxt =
@@ -513,7 +526,7 @@ export function ticketCard(c: MasCycle, t: MasTicket): string {
   lines.push('💰 STAKE: ' + formatNaira(stake));
   lines.push('If it wins: ' + winTxt);
   lines.push('If it loses: ' + lossTxt);
-  lines.push('Projected return: ' + formatNaira(target));
+  lines.push('Target return (fixed): ' + formatNaira(target));
 
   if (t.capped) {
     lines.push('');
@@ -524,7 +537,7 @@ export function ticketCard(c: MasCycle, t: MasTicket): string {
   if (target < Number(c.initial_bankroll_kobo)) {
     lines.push('');
     lines.push(
-      '⚠️ The projected return (' +
+      '⚠️ The target return (' +
         formatNaira(target) +
         ') is below your starting bankroll (' +
         formatNaira(Number(c.initial_bankroll_kobo)) +

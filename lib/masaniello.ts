@@ -5,7 +5,8 @@
 //   V(n,0) = 1                       (target reached, cycle stops)
 //   V(n,k) = 0 when k > n            (unreachable)
 //   V(n,k) = V(n-1,k) + (V(n-1,k-1) - V(n-1,k)) / Oref
-//   Target return R = bankroll / V(n,k), re-derived at every ticket.
+//   FIXED TARGET R = initial bankroll / V(N,K), worked out ONCE at the
+//   start of the cycle and never changed by wins, losses or odds.
 //   Stake for a ticket at ACTUAL odds O:
 //        s = (R * V(n-1,k-1) - bankroll) / (O - 1)
 //   so a WIN lands exactly on the plan. Future tickets are assumed
@@ -16,6 +17,8 @@
 // Stakes are floored to whole naira. Exact rational math via BigInt,
 // so a stake that is exactly 375 never comes out as 374.999...
 // No BigInt literals (1n) are used, so it compiles on any TS target.
+// There is NO upper limit on the number of bets (N). A very large N
+// makes the exact maths slower, but it still works.
 // ═══════════════════════════════════════════════════════════════
 
 export const MIN_STAKE_KOBO = 100; // ₦1
@@ -32,6 +35,13 @@ export type CycleState = {
   winsNeeded: number;
 };
 
+// What fixes the target: the cycle's starting bankroll, N and K.
+export type FixedTarget = {
+  initialBankrollKobo: number;
+  totalBets: number;
+  winsRequired: number;
+};
+
 export type StakeStatus =
   | 'OK'
   | 'CAPPED'
@@ -46,7 +56,7 @@ export type StakePlan = {
   // bankroll if this ticket wins / loses (after flooring + payout flooring)
   winBankrollKobo: number;
   lossBankrollKobo: number;
-  // target return re-derived from current bankroll (projection only)
+  // the fixed target return (projection only)
   projectedReturnKobo: number;
   capped: boolean; // stake had to be reduced to the bankroll
   message: string;
@@ -134,8 +144,8 @@ export function validateConfig(
 ): string | null {
   if (!Number.isInteger(bankrollKobo) || bankrollKobo < MIN_STAKE_KOBO)
     return 'Bankroll must be at least ₦1.';
-  if (!Number.isInteger(totalBets) || totalBets < 2 || totalBets > 30)
-    return 'Total bets (N) must be a whole number from 2 to 30.';
+  if (!Number.isInteger(totalBets) || totalBets < 2)
+    return 'Total bets (N) must be a whole number of 2 or more.';
   if (!Number.isInteger(winsRequired) || winsRequired < 1 || winsRequired >= totalBets)
     return 'Required wins (K) must be at least 1 and less than N.';
   if (!Number.isInteger(refOddsH) || refOddsH <= 100)
@@ -151,7 +161,16 @@ export function initialState(
   return { bankrollKobo, betsLeft: totalBets, winsNeeded: winsRequired };
 }
 
-// Target return (kobo, floored) for a state at reference odds.
+// The FIXED target return for a cycle (exact, in kobo, floored).
+// = starting bankroll / V(N,K). Never changes during the cycle.
+export function fixedTargetKobo(fixed: FixedTarget, refOddsH: number): number {
+  const v = V(fixed.totalBets, fixed.winsRequired, refOddsH);
+  if (v.n === ZERO) return 0;
+  return Number(qFloor(qDiv(qInt(fixed.initialBankrollKobo), v)));
+}
+
+// Old behaviour (target re-derived from the CURRENT bankroll). Kept only
+// so nothing that still imports it breaks; the bot no longer uses it.
 export function targetReturnKobo(state: CycleState, refOddsH: number): number {
   const v = V(state.betsLeft, state.winsNeeded, refOddsH);
   if (v.n === ZERO) return 0;
@@ -171,10 +190,13 @@ function payoutKobo(stakeKobo: number, oddsH: number): number {
 }
 
 // ── The stake for the next ticket ─────────────────────────────────────────
+// `fixed` = the cycle's starting bankroll, N and K. When given, the target
+// is FIXED from it. (Without it the old moving target is used.)
 export function planStake(
   state: CycleState,
   oddsH: number,
-  refOddsH: number
+  refOddsH: number,
+  fixed?: FixedTarget
 ): StakePlan {
   const blank = (status: StakeStatus, message: string): StakePlan => ({
     status,
@@ -198,13 +220,22 @@ export function planStake(
   const n = state.betsLeft;
   const k = state.winsNeeded;
   const bank = qInt(state.bankrollKobo);
-  const vNow = V(n, k, refOddsH);
-  const R = qDiv(bank, vNow); // vNow > 0 here because k <= n
+
+  // The target: fixed from the cycle's start, or (old way) from the current bankroll.
+  let R: Q;
+  if (fixed) {
+    const vStart = V(fixed.totalBets, fixed.winsRequired, refOddsH);
+    R = qDiv(qInt(fixed.initialBankrollKobo), vStart);
+  } else {
+    R = qDiv(bank, V(n, k, refOddsH)); // vNow > 0 here because k <= n
+  }
+
   const winTarget = qMul(R, V(n - 1, k - 1, refOddsH));
   const oMinus1 = q(BigInt(oddsH - 100), BigInt(100));
   const exact = qDiv(qSub(winTarget, bank), oMinus1);
 
   let capped = false;
+  let usedMinimum = false;
   let stakeKobo: number;
   const exactFloorKobo = Number(qFloor(exact));
   if (exactFloorKobo >= state.bankrollKobo) {
@@ -213,13 +244,12 @@ export function planStake(
   } else {
     stakeKobo = Math.floor(exactFloorKobo / 100) * 100;
   }
-  if (stakeKobo < 0) stakeKobo = 0;
-
-  if (stakeKobo < MIN_STAKE_KOBO)
-    return {
-      ...blank('INFEASIBLE', 'Calculated stake is below ₦1, so the cycle cannot continue.'),
-      projectedReturnKobo: Number(qFloor(R)),
-    };
+  // Zero or negative (or under ₦1): use the ₦1 minimum. The bankroll is at
+  // least ₦1 here because the cycle is ACTIVE.
+  if (stakeKobo < MIN_STAKE_KOBO) {
+    stakeKobo = MIN_STAKE_KOBO;
+    usedMinimum = true;
+  }
 
   const winBank = state.bankrollKobo - stakeKobo + payoutKobo(stakeKobo, oddsH);
   const lossBank = state.bankrollKobo - stakeKobo;
@@ -233,6 +263,8 @@ export function planStake(
     capped,
     message: capped
       ? 'Plan degraded: the odds are too low to hold the plan, so the stake is capped at your bankroll.'
+      : usedMinimum
+      ? 'Minimum stake used: the bankroll already covers the target on a win.'
       : 'OK',
   };
 }
@@ -286,14 +318,19 @@ export function describeCycle(
   if (err) return '❌ ' + err;
   if (totalBets > 12) return '❌ /testmas ladder is limited to N up to 12.';
 
+  const fixed: FixedTarget = {
+    initialBankrollKobo: bankrollKobo,
+    totalBets,
+    winsRequired,
+  };
   const start = initialState(bankrollKobo, totalBets, winsRequired);
-  const target = targetReturnKobo(start, refOddsH);
+  const target = fixedTargetKobo(fixed, refOddsH);
   const lines: string[] = [];
   lines.push(
     'Bankroll ' + formatNaira(bankrollKobo) + ', N=' + totalBets + ', K=' + winsRequired +
       ', odds ' + (refOddsH / 100).toFixed(2)
   );
-  lines.push('Target return: ' + formatNaira(target));
+  lines.push('Target return (fixed): ' + formatNaira(target));
   lines.push('');
   lines.push('left/need | bankroll | stake | win -> | loss ->');
 
@@ -306,7 +343,7 @@ export function describeCycle(
     if (seen[key]) continue;
     seen[key] = true;
     if (cycleStatus(s) !== 'ACTIVE') continue;
-    const p = planStake(s, refOddsH, refOddsH);
+    const p = planStake(s, refOddsH, refOddsH, fixed);
     if (p.stakeKobo <= 0) continue;
     const w = settle(s, 'win', p.stakeKobo, refOddsH);
     const l = settle(s, 'loss', p.stakeKobo, refOddsH);
@@ -325,3 +362,4 @@ export function describeCycle(
   }
   return lines.join('\n');
 }
+  
