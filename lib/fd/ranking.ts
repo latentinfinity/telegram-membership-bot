@@ -19,10 +19,12 @@
 //   Groups are by t, compared EXACTLY (no rounding up). Each match is in ONE group only:
 //   5+ (t >= 5), 4+ (4 <= t < 5), 3+ (3 <= t < 4). Below 3 is not listed.
 //   Inside a group the order is by Score, highest first (not by t).
-// BASKETBALL (pasted matches only): a league line that starts with the word Basketball
-//   (any capitals) marks the matches under it as basketball. Basketball gets the same WIN
-//   ranking and RX 2+ (with the D2 tick), NO Draw, and ONE single Over list ordered by
-//   Score (no t groups). Football and basketball sections are kept apart.
+//   FOOTBALL number next to each match: (home conceded + away conceded - 0.5) rounded half up,
+//   which equals the whole-number part of the total conceded. Exact integer maths.
+// BASKETBALL (pasted matches only): the word Basketball on the first line of the paste marks
+//   every match in it as basketball (the stored league starts with "Basketball"). Basketball
+//   gets the same WIN ranking and RX 2+ (with the D2 tick), NO Draw, and ONE single Over list
+//   ordered by Score (no t groups). BASKETBALL number next to each match: Score - 10, floored.
 // Part 1: one competition's stored pending matches (fd_fixtures). Football only.
 // Part 2: the matches pasted into the storage (one list across all leagues).
 import { createAdminClient } from '@/lib/supabase/admin';
@@ -59,6 +61,7 @@ type DrawEntry = {
 type OverItem = {
   name: string;
   tHundredths: number; // t = hs + as in hundredths, exact
+  concedeH: number; // home conceded + away conceded in hundredths, exact
   score: number;
   extra: string;
   order: number;
@@ -210,6 +213,7 @@ function drawMessages(title: string, draws: DrawEntry[]): string[] {
 }
 
 // The OVER RANKING section: one group per t band (5+, 4+, 3+), ordered by Score inside a group.
+// Next to each match: (home conceded + away conceded - 0.5) rounded half up = whole part of the total.
 function overMessages(title: string, items: OverItem[]): string[] {
   const bands: { label: string; min: number; max: number }[] = [
     { label: '5+', min: 500, max: Infinity },
@@ -229,7 +233,8 @@ function overMessages(title: string, items: OverItem[]): string[] {
     }
     inBand.forEach((m, i) => {
       const line =
-        i + 1 + ') ' + m.name + '\nt ' + (m.tHundredths / 100).toFixed(2) +
+        i + 1 + ') ' + m.name + ' (' + Math.floor(m.concedeH / 100) + ')' +
+        '\nt ' + (m.tHundredths / 100).toFixed(2) +
         ' | Score ' + m.score.toFixed(3) + (m.extra ? '\n' + m.extra : '');
       entries.push(i === 0 ? b.label + ' (' + inBand.length + ')\n' + line : line);
     });
@@ -240,12 +245,15 @@ function overMessages(title: string, items: OverItem[]): string[] {
 }
 
 // Basketball OVER: ONE single list, highest Score first. No t groups.
+// Next to each match: Score - 10, floored.
 function overBasketballMessages(title: string, items: OverItem[]): string[] {
   const header = 'BASKETBALL OVER RANKING - ' + title + ' (' + items.length + ')';
   if (items.length === 0) return [header + '\nNone'];
   const sorted = items.slice().sort((a, b) => b.score - a.score || a.order - b.order);
   const entries = sorted.map(
-    (m, i) => i + 1 + ') ' + m.name + '\nScore ' + m.score.toFixed(3) + (m.extra ? '\n' + m.extra : '')
+    (m, i) =>
+      i + 1 + ') ' + m.name + ' (' + Math.floor(m.score - 10 + 1e-9) + ')' +
+      '\nScore ' + m.score.toFixed(3) + (m.extra ? '\n' + m.extra : '')
   );
   return pack(header, entries, '');
 }
@@ -385,6 +393,7 @@ export async function rankCompetition(
       overs.push({
         name: r.home_name + ' - ' + r.away_name,
         tHundredths: hsH + asH,
+        concedeH: hcH + acH,
         score: overScore(hs, hc, as, ac),
         extra: when,
         order: i,
@@ -422,7 +431,7 @@ function splitTeams(name: string): { home: string; away: string } | null {
   return null;
 }
 
-// A league line that starts with the word Basketball (any capitals) marks basketball.
+// A stored league that starts with the word Basketball marks a basketball match.
 function isBasketball(league: string | null): boolean {
   if (!league) return false;
   return league.trim().toLowerCase().indexOf('basketball') === 0;
@@ -496,6 +505,7 @@ function rankPastedGroup(rows: PastedRow[], basketball: boolean): string[] {
     overs.push({
       name: r.name,
       tHundredths: hsH + asH,
+      concedeH: hcH + acH,
       score: overScore(hs, hc, as, ac),
       extra: league,
       order: i,
