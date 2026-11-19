@@ -454,7 +454,7 @@ function rankPastedGroup(rows: PastedRow[], basketball: boolean): string[] {
     const teams = splitTeams(r.name);
     const homeName = teams ? teams.home : 'Home team of ' + r.name;
     const awayName = teams ? teams.away : 'Away team of ' + r.name;
-    const league = r.league ? r.league : '';
+    const league = r.league ? r.league.replace(/^basketball\s*\|?\s*/i, '').trim() : '';
     const hp = homePoint(hs, hc, as, ac);
     const ap = awayPoint(hs, hc, as, ac);
     sides.push({

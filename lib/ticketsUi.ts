@@ -52,6 +52,7 @@ import { handlePostAdmin } from '@/lib/fd/postAdmin';
 import { handleAd2Button } from '@/lib/ad2Admin';
 import { handleFbButton } from '@/lib/fb/fbAdmin';
 import { runScores } from '@/lib/fd/scoreNew';
+import { scoresCompetition, scoresPasted } from '@/lib/fd/scoreXY';
 import {
   listStored,
   countStored,
@@ -85,6 +86,7 @@ function tkMenu(storedCount: number): InlineKeyboard {
     rows.push([{ text: '🗑 Clear Matches', callback_data: 'a_tk_clear' }]);
   }
   rows.push([{ text: '📊 Rankings', callback_data: 'a_tk_rk' }]);
+  rows.push([{ text: '🔢 Correct Score X:Y', callback_data: 'a_tk_xs' }]);
   rows.push([{ text: '📡 Auto Posting', callback_data: 'a_tk_ap' }]);
   rows.push([{ text: '💬 Facebook', callback_data: 'a_tk_fb' }]);
   rows.push([{ text: '🎁 1win Ad', callback_data: 'a_tk_ad2' }]);
@@ -518,6 +520,66 @@ async function handleTicketsRankPasted(chatId: number) {
   }
 }
 
+// ── Correct Score X:Y (read only). Private chat only. ─────────────────────
+function tkXsBack(): InlineKeyboard {
+  return [
+    [{ text: '🔢 Correct Score X:Y', callback_data: 'a_tk_xs' }],
+    [{ text: '⬅️ Tickets Menu', callback_data: 'a_tk_menu' }],
+  ];
+}
+
+async function handleTicketsXsMenu(chatId: number) {
+  const r = await listRankComps();
+  const rows: InlineKeyboard = [];
+  let text = 'CORRECT SCORE X:Y\n\nPick a competition, or the matches you pasted.';
+  if (r.ok) {
+    r.comps.forEach((c) => {
+      rows.push([{ text: c.name + ' (' + c.count + ')', callback_data: 'a_tk_xs_c_' + c.code }]);
+    });
+    if (r.comps.length === 0) text += '\n\nNo competition has stored matches right now.';
+  } else {
+    text += '\n\nCould not read the competitions (' + r.error + ').';
+  }
+  rows.push([{ text: '📋 Pasted matches', callback_data: 'a_tk_xs_p' }]);
+  rows.push([{ text: '⬅️ Tickets Menu', callback_data: 'a_tk_menu' }]);
+  await sendMessage(chatId, text, rows);
+}
+
+async function handleTicketsXsComp(chatId: number, code: string) {
+  if (!/^[A-Z0-9]{2,6}$/.test(code)) {
+    await sendMessage(chatId, 'That competition code is not valid.', tkXsBack());
+    return;
+  }
+  const r = await scoresCompetition(code);
+  if (!r.ok) {
+    await sendMessage(chatId, '❌ Could not build the scores: ' + r.error, tkXsBack());
+    return;
+  }
+  for (let i = 0; i < r.messages.length; i++) {
+    if (i === r.messages.length - 1) await sendMessage(chatId, r.messages[i], tkXsBack());
+    else await sendMessage(chatId, r.messages[i]);
+  }
+}
+
+async function handleTicketsXsPasted(chatId: number) {
+  const l = await listStored();
+  if (!l.ok) {
+    await sendMessage(chatId, '❌ Could not read the storage: ' + l.error, tkXsBack());
+    return;
+  }
+  if (l.rows.length === 0) {
+    await sendMessage(chatId, 'The storage is empty. Add matches first.', tkXsBack());
+    return;
+  }
+  const chunks = scoresPasted(
+    l.rows.map((x) => ({ name: x.name, dataLine: x.dataLine, league: x.league }))
+  );
+  for (let i = 0; i < chunks.length; i++) {
+    if (i === chunks.length - 1) await sendMessage(chatId, chunks[i], tkXsBack());
+    else await sendMessage(chatId, chunks[i]);
+  }
+}
+
 // ── Team Over Lists (read only): the same rules as the automatic posts ────
 // Sent to this private chat only. Nothing goes to the channel or the group.
 async function handleTicketsTeamOver(chatId: number) {
@@ -734,6 +796,12 @@ export async function handleTicketsButton(
     await handleTicketsRankComp(chatId, data.slice('a_tk_rk_c_'.length));
   } else if (data === 'a_tk_rk_p') {
     await handleTicketsRankPasted(chatId);
+  } else if (data === 'a_tk_xs') {
+    await handleTicketsXsMenu(chatId);
+  } else if (data.indexOf('a_tk_xs_c_') === 0) {
+    await handleTicketsXsComp(chatId, data.slice('a_tk_xs_c_'.length));
+  } else if (data === 'a_tk_xs_p') {
+    await handleTicketsXsPasted(chatId);
   } else if (data === 'a_tk_to') {
     await handleTicketsTeamOver(chatId);
   } else if (data === 'a_tk_cs') {

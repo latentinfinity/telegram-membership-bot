@@ -79,7 +79,8 @@ function isFeasible(rem: number[]): boolean {
 
 function pickWeighted(rem: number[], skip: number, rand: () => number): number {
   let total = 0;
-  for (let i = 0; i < rem.length; i++) if (i !== skip) total += rem[i];
+  for (let i = 0; i < rem.length; i++)
+    if (i !== skip) total += rem[i];
   let r = rand() * total;
   let last = -1;
   for (let i = 0; i < rem.length; i++) {
@@ -105,7 +106,7 @@ function twoLargest(rem: number[]): [number, number] {
   return [a, b];
 }
 
-function shuffle<T>(arr: T[], rand: () => number): T[] {
+function shuffle < T > (arr: T[], rand: () => number): T[] {
   const a = arr.slice();
   for (let i = a.length - 1; i > 0; i--) {
     const j = Math.floor(rand() * (i + 1));
@@ -118,22 +119,22 @@ function shuffle<T>(arr: T[], rand: () => number): T[] {
 
 // Generic core: every item has exactly two options (a pair). Places each
 // option in a ticket so that all the ticket rules hold.
-type PairItem = { id: number; pair: [string, string] };
-type PairPlaced = { id: number; code: string };
+type PairItem = { id: number;pair: [string, string] };
+type PairPlaced = { id: number;code: string };
 
 function buildFromPairs(items: PairItem[], rand: () => number): PairPlaced[][] {
   const sizes = ticketSizes(items.length);
   const tickets: PairPlaced[][] = sizes.map(() => []);
   if (items.length === 0) return tickets;
-
+  
   const rem = sizes.slice();
   const order = shuffle(items, rand);
-
+  
   for (let k = 0; k < order.length; k++) {
     const m = order[k];
     let i = -1;
     let j = -1;
-
+    
     for (let attempt = 0; attempt < 25; attempt++) {
       const a = pickWeighted(rem, -1, rand);
       const b = a < 0 ? -1 : pickWeighted(rem, a, rand);
@@ -155,12 +156,12 @@ function buildFromPairs(items: PairItem[], rand: () => number): PairPlaced[][] {
       rem[i] -= 1;
       rem[j] -= 1;
     }
-
+    
     const flip = rand() < 0.5;
     tickets[i].push({ id: m.id, code: flip ? m.pair[1] : m.pair[0] });
     tickets[j].push({ id: m.id, code: flip ? m.pair[0] : m.pair[1] });
   }
-
+  
   return tickets.map((t) => shuffle(t, rand));
 }
 
@@ -173,7 +174,7 @@ export function buildTickets(
   const placed = buildFromPairs(
     matches.map((m) => {
       const o = optionsFor(m.call);
-      return { id: m.id, pair: [String(o[0]), String(o[1])] as [string, string] };
+      return { id: m.id, pair: [String(o[0]), String(o[1])] as[string, string] };
     }),
     rand
   );
@@ -216,17 +217,17 @@ export function removalCount(m: number, percent: number = ELIMINATE_PERCENT): nu
 // Removes removalCount(items.length) items at random. Both lists keep the
 // original order. Random removal does not pick out losing matches: every
 // match has the same chance of being removed.
-export function eliminateRandom<T>(
+export function eliminateRandom < T > (
   items: T[],
   percent: number = ELIMINATE_PERCENT,
   rand: () => number = Math.random
-): { kept: T[]; removed: T[] } {
+): { kept: T[];removed: T[] } {
   const n = removalCount(items.length, percent);
   const order = shuffle(
     items.map((_, i) => i),
     rand
   );
-  const gone: Record<number, boolean> = {};
+  const gone: Record < number, boolean > = {};
   for (let i = 0; i < n; i++) gone[order[i]] = true;
   const kept: T[] = [];
   const removed: T[] = [];
@@ -244,7 +245,7 @@ export type NewMatch = {
   dataLine: string;
   league: string | null; // the league line above the match, if there was one
 };
-export type RejectedMatch = { label: string; reason: string };
+export type RejectedMatch = { label: string;reason: string };
 export type ParseOutcome = {
   matches: NewMatch[];
   rejected: RejectedMatch[];
@@ -294,10 +295,19 @@ export function parseNewMatches(text: string): ParseOutcome {
     duplicatesInPaste: 0,
     leaguesFound: 0,
   };
-  const indexByKey: Record<string, number> = {};
+  const indexByKey: Record < string, number > = {};
   let league: string | null = null;
-
+  let basketball = false;
+  let seenContent = false;
+  
   for (let i = 0; i < lines.length; i++) {
+    if (lines[i].length > 0 && !seenContent) {
+      seenContent = true;
+      if (lines[i].toLowerCase() === 'basketball') {
+        basketball = true;
+        continue;
+      }
+    }
     const head = lines[i].match(/^(\d+)\)\s*(.*)$/);
     if (!head) {
       if (lines[i].length > 0 && !looksLikeDataLine(lines[i])) {
@@ -308,7 +318,7 @@ export function parseNewMatches(text: string): ParseOutcome {
     }
     const label = '#' + head[1];
     const name = cleanMatchName(head[2]);
-
+    
     let j = i + 1;
     while (j < lines.length && lines[j].length === 0) j++;
     // A line without any comma is not a data line (it may be a league line,
@@ -319,7 +329,7 @@ export function parseNewMatches(text: string): ParseOutcome {
     }
     const dataLine = lines[j];
     i = j;
-
+    
     if (!name || !/[a-zA-Z\u00C0-\uFFFF]/.test(name)) {
       out.rejected.push({ label, reason: 'no match name' });
       continue;
@@ -334,9 +344,10 @@ export function parseNewMatches(text: string): ParseOutcome {
       out.rejected.push({ label, reason: why });
       continue;
     }
-
+    
     const nameKey = matchKey(name);
-    const item: NewMatch = { name, nameKey, dataLine, league };
+    const storedLeague = basketball ? (league ? 'Basketball | ' + league : 'Basketball') : league;
+    const item: NewMatch = { name, nameKey, dataLine, league: storedLeague };
     if (indexByKey[nameKey] !== undefined) {
       out.matches[indexByKey[nameKey]] = item; // later one replaces the earlier one
       out.duplicatesInPaste++;
@@ -345,8 +356,8 @@ export function parseNewMatches(text: string): ParseOutcome {
       out.matches.push(item);
     }
   }
-
-  const seen: Record<string, boolean> = {};
+  
+  const seen: Record < string, boolean > = {};
   out.matches.forEach((m) => {
     if (m.league) seen[m.league] = true;
   });
@@ -355,7 +366,7 @@ export function parseNewMatches(text: string): ParseOutcome {
 }
 
 // ── Planning: which stored matches have an Over call ──────────────────────
-export type StoredMatch = { name: string; dataLine: string; league?: string | null };
+export type StoredMatch = { name: string;dataLine: string;league ? : string | null };
 
 export type PlannedMatch = {
   id: number; // 1-based position in the stored list
@@ -398,11 +409,11 @@ export function formatTickets(
   storedCount: number,
   removed: PlannedMatch[] = []
 ): string[] {
-  const byId: Record<number, PlannedMatch> = {};
+  const byId: Record < number, PlannedMatch > = {};
   planned.forEach((m) => {
     byId[m.id] = m;
   });
-
+  
   const messages: string[] = [];
   tickets.forEach((ticket, ti) => {
     const rows = ticket.map((o) => {
@@ -419,16 +430,16 @@ export function formatTickets(
     const body = rows
       .map(
         (r, i) =>
-          i + 1 + ') ' + r.name + (r.league ? '\n' + r.league : '') +
-          '\nOver ' + r.line + ' · ' + Math.round(r.chance * 100) + '%'
+        i + 1 + ') ' + r.name + (r.league ? '\n' + r.league : '') +
+        '\nOver ' + r.line + ' · ' + Math.round(r.chance * 100) + '%'
       )
       .join('\n\n');
     messages.push(
       'TICKET ' + (ti + 1) + ' of ' + tickets.length + ' (' + ticket.length + ' ' +
-        (ticket.length === 1 ? 'match' : 'matches') + ')\n\n' + body
+      (ticket.length === 1 ? 'match' : 'matches') + ')\n\n' + body
     );
   });
-
+  
   const lines: string[] = [];
   lines.push(
     tickets.length + ' tickets from ' + planned.length + ' matches (' + planned.length * 2 + ' options).'
@@ -436,7 +447,7 @@ export function formatTickets(
   if (removed.length > 0) {
     lines.push(
       'Removed at random (' + ELIMINATE_PERCENT + '%): ' +
-        removed.map((m) => m.name).join(', ') + '.'
+      removed.map((m) => m.name).join(', ') + '.'
     );
   }
   const left = storedCount - planned.length - removed.length;
@@ -477,7 +488,7 @@ export const TOP_OVER35_COUNT = 5;
 export type PoolKind = 'home' | 'away' | 'over35' | 'over25';
 export type OptionCode = 'H' | '1X' | 'A' | 'X2' | 'O1.5' | 'O2.5' | 'O3.5';
 
-export const OPTION_LABEL: Record<OptionCode, string> = {
+export const OPTION_LABEL: Record < OptionCode, string > = {
   H: 'Home',
   '1X': 'Home/Draw (1X)',
   A: 'Away',
@@ -500,7 +511,8 @@ export type PoolMatch = {
   league: string | null;
   kind: PoolKind;
   confidence: number; // chance of the main call, 0..1
-  chances: Partial<Record<OptionCode, number>>; // chance of each of its two options
+  chances: Partial < Record < OptionCode,
+  number >> ; // chance of each of its two options
 };
 
 export type TopOver35 = {
@@ -553,7 +565,7 @@ function halfSum(x: string, y: string): number | null {
   return Number(n) / Number(d);
 }
 
-export function expectedGoals(dataLine: string): { eH: number; eA: number } | null {
+export function expectedGoals(dataLine: string): { eH: number;eA: number } | null {
   const parts = dataLine.split(',').map((p) => p.trim());
   const nums = parts.length === 6 ? parts.slice(2) : parts;
   if (nums.length !== 4) return null;
@@ -571,8 +583,8 @@ export function planPool(stored: StoredMatch[]): PoolPlan {
     .map((m, i) => i + 1 + ') ' + m.name + '\n' + m.dataLine)
     .join('\n\n');
   const res = runPrediction(text);
-  const byNum: Record<number, PoolMatch> = {};
-
+  const byNum: Record < number, PoolMatch > = {};
+  
   const offer = (cand: PoolMatch) => {
     const have = byNum[cand.id];
     if (!have || cand.confidence > have.confidence) byNum[cand.id] = cand;
@@ -581,7 +593,7 @@ export function planPool(stored: StoredMatch[]): PoolPlan {
     const s = stored[num - 1];
     return s ? { id: num, name: s.name, league: s.league || null } : null;
   };
-
+  
   res.outcomes.forEach((o) => {
     if (o.side === 'Draw') return;
     if (percentShown(o.confidence) < MIN_OUTCOME_PERCENT) return;
@@ -607,11 +619,11 @@ export function planPool(stored: StoredMatch[]): PoolPlan {
     if (!b) return;
     offer({ ...b, kind: 'over25', confidence: o.confidence, chances: { 'O2.5': o.confidence, 'O1.5': chanceOverLine(o.total, 1.5) } });
   });
-
+  
   const pool = Object.keys(byNum)
     .map((k) => byNum[Number(k)])
     .sort((a, b) => a.id - b.id);
-
+  
   const top: TopOver35[] = [];
   res.over35.forEach((o) => {
     if (top.length >= TOP_OVER35_COUNT) return;
@@ -620,21 +632,21 @@ export function planPool(stored: StoredMatch[]): PoolPlan {
     if (!b) return;
     top.push({ ...b, over35: o.confidence, over25: chanceOverLine(o.total, 2.5) });
   });
-
+  
   const unreadable = res.skipped.map((s) => (stored[s.num - 1] ? stored[s.num - 1].name : '#' + s.num));
   return { stored: stored.length, pool, top, unreadable };
 }
 
-export type PoolTicketOption = { matchId: number; option: OptionCode };
+export type PoolTicketOption = { matchId: number;option: OptionCode };
 
 export function buildPoolTickets(
-  items: { id: number; kind: PoolKind }[],
+  items: { id: number;kind: PoolKind } [],
   rand: () => number = Math.random
 ): PoolTicketOption[][] {
   const placed = buildFromPairs(
     items.map((m) => {
       const o = poolOptions(m.kind);
-      return { id: m.id, pair: [o[0], o[1]] as [string, string] };
+      return { id: m.id, pair: [o[0], o[1]] as[string, string] };
     }),
     rand
   );
@@ -643,7 +655,7 @@ export function buildPoolTickets(
   );
 }
 
-export function countByKind(pool: PoolMatch[]): { home: number; away: number; over35: number; over25: number } {
+export function countByKind(pool: PoolMatch[]): { home: number;away: number;over35: number;over25: number } {
   const c = { home: 0, away: 0, over35: 0, over25: 0 };
   pool.forEach((m) => {
     c[m.kind] += 1;
@@ -660,11 +672,11 @@ export function formatPoolTickets(
   removed: PoolMatch[],
   top: TopOver35[]
 ): string[] {
-  const byId: Record<number, PoolMatch> = {};
+  const byId: Record < number, PoolMatch > = {};
   pool.forEach((m) => {
     byId[m.id] = m;
   });
-
+  
   const messages: string[] = [];
   tickets.forEach((ticket, ti) => {
     const rows = ticket.map((o) => {
@@ -675,16 +687,16 @@ export function formatPoolTickets(
     const body = rows
       .map(
         (r, i) =>
-          i + 1 + ') ' + r.name + (r.league ? '\n' + r.league : '') +
-          '\n' + OPTION_LABEL[r.option] + ' · ' + Math.round(r.chance * 100) + '%'
+        i + 1 + ') ' + r.name + (r.league ? '\n' + r.league : '') +
+        '\n' + OPTION_LABEL[r.option] + ' · ' + Math.round(r.chance * 100) + '%'
       )
       .join('\n\n');
     messages.push(
       'TICKET ' + (ti + 1) + ' of ' + tickets.length + ' (' + ticket.length + ' ' +
-        (ticket.length === 1 ? 'match' : 'matches') + ')\n\n' + body
+      (ticket.length === 1 ? 'match' : 'matches') + ')\n\n' + body
     );
   });
-
+  
   const k = countByKind(pool);
   const lines: string[] = [];
   lines.push(tickets.length + ' tickets from ' + pool.length + ' matches (' + pool.length * 2 + ' options).');
@@ -699,25 +711,25 @@ export function formatPoolTickets(
   lines.push('Every match appears in two different tickets, once per option, so if it goes wrong both tickets lose that leg.');
   lines.push('% = model chance from expected goals (independent Poisson), an estimate, not a measured hit rate. The tickets are random every time.');
   messages.push(lines.join('\n'));
-
+  
   if (top.length === 0) {
     messages.push('TOP OVER 3.5\n\nNo Over 3.5 call at ' + MIN_OVER35_PERCENT + '% or more this time.');
   } else {
-    const removedIds: Record<number, boolean> = {};
+    const removedIds: Record < number, boolean > = {};
     removed.forEach((m) => {
       removedIds[m.id] = true;
     });
     const body = top
       .map(
         (t, i) =>
-          i + 1 + ') ' + t.name + (t.league ? '\n' + t.league : '') +
-          '\nOver 3.5 · ' + Math.round(t.over35 * 100) + '% (as Over 2.5: ' + Math.round(t.over25 * 100) + '%)' +
-          (removedIds[t.id] ? '\n(removed at random, not in the tickets)' : '')
+        i + 1 + ') ' + t.name + (t.league ? '\n' + t.league : '') +
+        '\nOver 3.5 · ' + Math.round(t.over35 * 100) + '% (as Over 2.5: ' + Math.round(t.over25 * 100) + '%)' +
+        (removedIds[t.id] ? '\n(removed at random, not in the tickets)' : '')
       )
       .join('\n\n');
     messages.push(
       'TOP OVER 3.5 (highest first)\n\n' + body +
-        '\n\nThese matches are also in the tickets above. In your past results the Over 3.5 % ran about 5 points higher than what happened; the Over 2.5 % was close.'
+      '\n\nThese matches are also in the tickets above. In your past results the Over 3.5 % ran about 5 points higher than what happened; the Over 2.5 % was close.'
     );
   }
   return messages;
@@ -747,10 +759,10 @@ export type TeamEntry = {
   order: number; // position in the stored list, home before away
 };
 
-export type TeamLists = { over15: TeamEntry[]; over05: TeamEntry[] };
+export type TeamLists = { over15: TeamEntry[];over05: TeamEntry[] };
 
 // "Home - Away", "Home vs Away" or "Home v Away" -> the two team names.
-export function splitTeams(name: string): { home: string; away: string } | null {
+export function splitTeams(name: string): { home: string;away: string } | null {
   const m = name.match(/^(.+?)\s+(?:-|vs\.?|v)\s+(.+)$/i);
   if (!m) return null;
   const home = m[1].trim();
@@ -762,7 +774,7 @@ export function splitTeams(name: string): { home: string; away: string } | null 
 export function planTeams(stored: StoredMatch[]): TeamLists {
   const over15: TeamEntry[] = [];
   const over05: TeamEntry[] = [];
-
+  
   stored.forEach((m, idx) => {
     const parts = m.dataLine.split(',').map((p) => p.trim());
     const nums = parts.length === 6 ? parts.slice(2) : parts;
@@ -772,16 +784,16 @@ export function planTeams(stored: StoredMatch[]): TeamLists {
     if (!cs || !eg) return;
     const teams = splitTeams(m.name);
     const league = m.league || null;
-    const sides: { side: 'home' | 'away'; lam: number; p: number; x: number }[] = [
+    const sides: { side: 'home' | 'away';lam: number;p: number;x: number } [] = [
       { side: 'home', lam: eg.eH, p: cs.prod.home, x: cs.exp.home },
       { side: 'away', lam: eg.eA, p: cs.prod.away, x: cs.exp.away },
     ];
     sides.forEach((s, k) => {
       const low = Math.min(s.p, s.x);
       if (low < 2) return;
-      const team = teams
-        ? s.side === 'home' ? teams.home : teams.away
-        : (s.side === 'home' ? 'Home team' : 'Away team') + ' of ' + m.name;
+      const team = teams ?
+        s.side === 'home' ? teams.home : teams.away :
+        (s.side === 'home' ? 'Home team' : 'Away team') + ' of ' + m.name;
       const entry: TeamEntry = {
         team,
         matchLine: teams ? teams.home + ' vs ' + teams.away : m.name,
@@ -793,7 +805,7 @@ export function planTeams(stored: StoredMatch[]): TeamLists {
       else over05.push(entry);
     });
   });
-
+  
   const byConfidence = (a: TeamEntry, b: TeamEntry): number =>
     b.confidence !== a.confidence ? b.confidence - a.confidence : a.order - b.order;
   over15.sort(byConfidence);
@@ -809,8 +821,8 @@ function formatTeamList(title: string, label: string, entries: TeamEntry[], note
   }
   const blocks = entries.map(
     (e, i) =>
-      i + 1 + ') ' + e.team + ' ' + label + ' ' + Math.round(e.confidence * 100) + '%\n' +
-      e.matchLine + (e.league ? ' (' + e.league + ')' : '')
+    i + 1 + ') ' + e.team + ' ' + label + ' ' + Math.round(e.confidence * 100) + '%\n' +
+    e.matchLine + (e.league ? ' (' + e.league + ')' : '')
   );
   const chunks: string[] = [];
   let current = title + '\n\n' + blocks[0];
