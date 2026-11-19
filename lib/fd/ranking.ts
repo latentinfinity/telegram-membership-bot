@@ -19,7 +19,11 @@
 //   Groups are by t, compared EXACTLY (no rounding up). Each match is in ONE group only:
 //   5+ (t >= 5), 4+ (4 <= t < 5), 3+ (3 <= t < 4). Below 3 is not listed.
 //   Inside a group the order is by Score, highest first (not by t).
-// Part 1: one competition's stored pending matches (fd_fixtures).
+// BASKETBALL (pasted matches only): a league line that starts with the word Basketball
+//   (any capitals) marks the matches under it as basketball. Basketball gets the same WIN
+//   ranking and RX 2+ (with the D2 tick), NO Draw, and ONE single Over list ordered by
+//   Score (no t groups). Football and basketball sections are kept apart.
+// Part 1: one competition's stored pending matches (fd_fixtures). Football only.
 // Part 2: the matches pasted into the storage (one list across all leagues).
 import { createAdminClient } from '@/lib/supabase/admin';
 
@@ -235,6 +239,17 @@ function overMessages(title: string, items: OverItem[]): string[] {
   return pack('OVER RANKING - ' + title + ' (' + listed + ')', entries, footer);
 }
 
+// Basketball OVER: ONE single list, highest Score first. No t groups.
+function overBasketballMessages(title: string, items: OverItem[]): string[] {
+  const header = 'BASKETBALL OVER RANKING - ' + title + ' (' + items.length + ')';
+  if (items.length === 0) return [header + '\nNone'];
+  const sorted = items.slice().sort((a, b) => b.score - a.score || a.order - b.order);
+  const entries = sorted.map(
+    (m, i) => i + 1 + ') ' + m.name + '\nScore ' + m.score.toFixed(3) + (m.extra ? '\n' + m.extra : '')
+  );
+  return pack(header, entries, '');
+}
+
 // Builds the draw tag and tick for one match (averages already in hundredths).
 function drawInfo(hsH: number, hcH: number, asH: number, acH: number): { tick: boolean; tag: string } {
   const sup = support(hsH, hcH, asH, acH);
@@ -407,7 +422,14 @@ function splitTeams(name: string): { home: string; away: string } | null {
   return null;
 }
 
-export function rankPasted(rows: PastedRow[]): string[] {
+// A league line that starts with the word Basketball (any capitals) marks basketball.
+function isBasketball(league: string | null): boolean {
+  if (!league) return false;
+  return league.trim().toLowerCase().indexOf('basketball') === 0;
+}
+
+// Ranks one group of pasted matches: football (basketball = false) or basketball (true).
+function rankPastedGroup(rows: PastedRow[], basketball: boolean): string[] {
   const sides: Side[] = [];
   const rxItems: RxItem[] = [];
   const draws: DrawEntry[] = [];
@@ -458,7 +480,7 @@ export function rankPasted(rows: PastedRow[]): string[] {
     if (q.away) {
       rxItems.push({ team: awayName, rx: ap / hp, tick: rxTick, line: 'Away at ' + homeName, extra: league, order: i * 2 + 1 });
     }
-    if (isDraw(hsH, hcH, asH, acH)) {
+    if (!basketball && isDraw(hsH, hcH, asH, acH)) {
       const info = drawInfo(hsH, hcH, asH, acH);
       draws.push({
         label: r.name,
@@ -484,12 +506,31 @@ export function rankPasted(rows: PastedRow[]): string[] {
   if (unreadable.length > 0) footerParts.push('Could not read: ' + unreadable.join(', '));
   footerParts.push('Rule-based order from the formula. No accuracy is promised.');
   const top = Math.floor(sides.length / 2);
-  const header = 'RANKING - pasted matches (top ' + top + ' of ' + sides.length + ' sides)';
+  const label = basketball ? 'basketball pasted matches' : 'pasted matches';
+  const header =
+    (basketball ? 'BASKETBALL RANKING - pasted matches' : 'RANKING - pasted matches') +
+    ' (top ' + top + ' of ' + sides.length + ' sides)';
   if (sides.length === 0) {
     return [header + '\n\nNo stored match could be read.\n\n' + footerParts.join('\n\n')];
   }
-  return pack(header, rankedEntries(sides), footerParts.join('\n\n'))
-    .concat(rxMessages('pasted matches', rxItems))
-    .concat(drawMessages('pasted matches', draws))
-    .concat(overMessages('pasted matches', overs));
+  let out = pack(header, rankedEntries(sides), footerParts.join('\n\n')).concat(rxMessages(label, rxItems));
+  if (basketball) {
+    out = out.concat(overBasketballMessages('pasted matches', overs));
+  } else {
+    out = out.concat(drawMessages(label, draws)).concat(overMessages(label, overs));
+  }
+  return out;
+}
+
+export function rankPasted(rows: PastedRow[]): string[] {
+  const football = rows.filter((r) => !isBasketball(r.league));
+  const basket = rows.filter((r) => isBasketball(r.league));
+  let out: string[] = [];
+  if (football.length > 0 || basket.length === 0) {
+    out = out.concat(rankPastedGroup(football, false));
+  }
+  if (basket.length > 0) {
+    out = out.concat(rankPastedGroup(basket, true));
+  }
+  return out;
 }
