@@ -14,17 +14,17 @@
 //   both ends included (exact integer maths). Closest first. A match gets a tick only when
 //   BOTH the main D and D2 are between 0 and 0.2 (included). Each match shows the tag
 //   (main stronger, supporting stronger), e.g. (Home, Away).
-// OVER RANKING section: X = 2*hs*ac/(hs+ac), Y = 2*as*hc/(as+hc), Score = S = X + Y
-//   (a zero denominator makes that part 0). t = hs + as.
-//   Groups are by t, compared EXACTLY (no rounding up). Each match is in ONE group only:
-//   5+ (t >= 5), 4+ (4 <= t < 5), 3+ (3 <= t < 4). Below 3 is not listed.
-//   Inside a group the order is by Score, highest first (not by t).
-//   FOOTBALL number next to each match: (home conceded + away conceded - 0.5) rounded half up,
-//   which equals the whole-number part of the total conceded. Exact integer maths.
+// FOOTBALL OVER RANKING: Score = S = X + Y, X = 2*hs*ac/(hs+ac), Y = 2*as*hc/(as+hc)
+//   (a zero denominator makes that part 0). t = hs + as = total scored.
+//   ONE single list of every match, Score ascending (lowest first).
+//   Bracket number next to each match: the smaller of (total conceded, total scored),
+//   minus 0.5, rounded half up (= whole part of that smaller total). Exact integer maths.
+//   Then a RATE x SCORE list: rate = bigger / smaller of (total scored, total conceded),
+//   value = rate * Score, top 10, descending. Matches with a zero total have no rate.
 // BASKETBALL (pasted matches only): the word Basketball on the first line of the paste marks
 //   every match in it as basketball (the stored league starts with "Basketball"). Basketball
 //   gets the same WIN ranking and RX 2+ (with the D2 tick), NO Draw, and ONE single Over list
-//   ordered by Score (no t groups). BASKETBALL number next to each match: Score - 10, floored.
+//   ordered by Score (highest first). BASKETBALL number next to each match: Score - 10, floored.
 // Part 1: one competition's stored pending matches (fd_fixtures). Football only.
 // Part 2: the matches pasted into the storage (one list across all leagues).
 import { createAdminClient } from '@/lib/supabase/admin';
@@ -212,37 +212,53 @@ function drawMessages(title: string, draws: DrawEntry[]): string[] {
   return pack(header, entries, '');
 }
 
-// The OVER RANKING section: one group per t band (5+, 4+, 3+), ordered by Score inside a group.
-// Next to each match: (home conceded + away conceded - 0.5) rounded half up = whole part of the total.
+// Football bracket number: the smaller of (total conceded, total scored), minus 0.5,
+// rounded half up = whole part of that smaller total. Values are in hundredths.
+function bracketOf(m: OverItem): number {
+  return Math.floor(Math.min(m.concedeH, m.tHundredths) / 100);
+}
+
+// The football OVER RANKING: one single list, Score ascending (lowest first),
+// then a RATE x SCORE list (top 10, descending).
+// rate = bigger / smaller of (total scored, total conceded); value = rate * Score.
 function overMessages(title: string, items: OverItem[]): string[] {
-  const bands: { label: string; min: number; max: number }[] = [
-    { label: '5+', min: 500, max: Infinity },
-    { label: '4+', min: 400, max: 500 },
-    { label: '3+', min: 300, max: 400 },
-  ];
-  const entries: string[] = [];
-  let listed = 0;
-  bands.forEach((b) => {
-    const inBand = items
-      .filter((x) => x.tHundredths >= b.min && x.tHundredths < b.max)
-      .sort((a, c) => c.score - a.score || a.order - c.order);
-    listed += inBand.length;
-    if (inBand.length === 0) {
-      entries.push(b.label + ' (0)\nNone');
+  const header = 'OVER RANKING (lowest score first) - ' + title + ' (' + items.length + ')';
+  if (items.length === 0) return [header + '\nNone'];
+
+  const sorted = items.slice().sort((a, b) => a.score - b.score || a.order - b.order);
+  const entries = sorted.map(
+    (m, i) =>
+      i + 1 + ') ' + m.name + ' (' + bracketOf(m) + ')' +
+      '\nt ' + (m.tHundredths / 100).toFixed(2) +
+      ' | Score ' + m.score.toFixed(3) + (m.extra ? '\n' + m.extra : '')
+  );
+  const first = pack(header, entries, '');
+
+  const rated: { m: OverItem; rate: number; value: number }[] = [];
+  let skipped = 0;
+  items.forEach((m) => {
+    const big = Math.max(m.concedeH, m.tHundredths);
+    const small = Math.min(m.concedeH, m.tHundredths);
+    if (small <= 0) {
+      skipped++;
       return;
     }
-    inBand.forEach((m, i) => {
-      const line =
-                i + 1 + ') ' + m.name + ' (' + Math.floor(Math.min(m.concedeH, m.tHundredths) / 100) + ')' +
-        
-        '\nt ' + (m.tHundredths / 100).toFixed(2) +
-        ' | Score ' + m.score.toFixed(3) + (m.extra ? '\n' + m.extra : '');
-      entries.push(i === 0 ? b.label + ' (' + inBand.length + ')\n' + line : line);
-    });
+    const rate = big / small;
+    rated.push({ m, rate, value: rate * m.score });
   });
-  const below = items.length - listed;
-  const footer = below > 0 ? below + ' match(es) with t below 3.00 are not listed.' : '';
-  return pack('OVER RANKING - ' + title + ' (' + listed + ')', entries, footer);
+  rated.sort((a, b) => b.value - a.value || a.m.order - b.m.order);
+  const top = rated.slice(0, 10);
+  const header2 = 'OVER RATE x SCORE (top 10) - ' + title + ' (' + top.length + ')';
+  if (top.length === 0) return first.concat([header2 + '\nNone']);
+  const entries2 = top.map(
+    (x, i) =>
+      i + 1 + ') ' + x.m.name + ' (' + bracketOf(x.m) + ')' +
+      '\nrate ' + x.rate.toFixed(3) + ' x Score ' + x.m.score.toFixed(3) +
+      ' = ' + x.value.toFixed(3) + (x.m.extra ? '\n' + x.m.extra : '')
+  );
+  const footer =
+    skipped > 0 ? skipped + ' match(es) left out: total scored or total conceded is 0, so no rate.' : '';
+  return first.concat(pack(header2, entries2, footer));
 }
 
 // Basketball OVER: ONE single list, highest Score first. No t groups.
