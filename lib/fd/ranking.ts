@@ -233,7 +233,8 @@ function overMessages(title: string, items: OverItem[]): string[] {
     }
     inBand.forEach((m, i) => {
       const line =
-        i + 1 + ') ' + m.name + ' (' + Math.floor(m.concedeH / 100) + ')' +
+                i + 1 + ') ' + m.name + ' (' + Math.floor(Math.min(m.concedeH, m.tHundredths) / 100) + ')' +
+        
         '\nt ' + (m.tHundredths / 100).toFixed(2) +
         ' | Score ' + m.score.toFixed(3) + (m.extra ? '\n' + m.extra : '');
       entries.push(i === 0 ? b.label + ' (' + inBand.length + ')\n' + line : line);
