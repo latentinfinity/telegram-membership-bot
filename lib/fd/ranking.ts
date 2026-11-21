@@ -21,6 +21,9 @@
 //   minus 0.5, rounded half up (= whole part of that smaller total). Exact integer maths.
 //   Then a RATE x SCORE list: rate = bigger / smaller of (total scored, total conceded),
 //   value = rate * Score, top 10, descending. Matches with a zero total have no rate.
+//   Then a RATE x SCORE 2 list: Score 2 = ac/(hs+1) + hc/(as+1), same rate,
+//   value 2 = rate * Score 2, top 10, descending. A match that is also in the first
+//   top 10 gets a check mark.
 // BASKETBALL (pasted matches only): the word Basketball on the first line of the paste marks
 //   every match in it as basketball (the stored league starts with "Basketball"). Basketball
 //   gets the same WIN ranking and RX 2+ (with the D2 tick), NO Draw, and ONE single Over list
@@ -46,6 +49,11 @@ export function overScore(hs: number, hc: number, as: number, ac: number): numbe
   return x + y;
 }
 
+// Score 2 = ac/(hs+1) + hc/(as+1).
+export function overScore2(hs: number, hc: number, as: number, ac: number): number {
+  return ac / (hs + 1) + hc / (as + 1);
+}
+
 type Side = { team: string; point: number; line: string; extra: string; order: number };
 type RxItem = { team: string; rx: number; tick: boolean; line: string; extra: string; order: number };
 type DrawEntry = {
@@ -63,6 +71,7 @@ type OverItem = {
   tHundredths: number; // t = hs + as in hundredths, exact
   concedeH: number; // home conceded + away conceded in hundredths, exact
   score: number;
+  score2: number;
   extra: string;
   order: number;
 };
@@ -219,8 +228,8 @@ function bracketOf(m: OverItem): number {
 }
 
 // The football OVER RANKING: one single list, Score ascending (lowest first),
-// then a RATE x SCORE list (top 10, descending).
-// rate = bigger / smaller of (total scored, total conceded); value = rate * Score.
+// then RATE x SCORE (top 10), then RATE x SCORE 2 (top 10, ✅ when also in the first top 10).
+// rate = bigger / smaller of (total scored, total conceded).
 function overMessages(title: string, items: OverItem[]): string[] {
   const header = 'OVER RANKING (lowest score first) - ' + title + ' (' + items.length + ')';
   if (items.length === 0) return [header + '\nNone'];
@@ -234,7 +243,7 @@ function overMessages(title: string, items: OverItem[]): string[] {
   );
   const first = pack(header, entries, '');
 
-  const rated: { m: OverItem; rate: number; value: number }[] = [];
+  const rated: { m: OverItem; rate: number; value: number; value2: number }[] = [];
   let skipped = 0;
   items.forEach((m) => {
     const big = Math.max(m.concedeH, m.tHundredths);
@@ -244,21 +253,42 @@ function overMessages(title: string, items: OverItem[]): string[] {
       return;
     }
     const rate = big / small;
-    rated.push({ m, rate, value: rate * m.score });
+    rated.push({ m, rate, value: rate * m.score, value2: rate * m.score2 });
   });
-  rated.sort((a, b) => b.value - a.value || a.m.order - b.m.order);
-  const top = rated.slice(0, 10);
-  const header2 = 'OVER RATE x SCORE (top 10) - ' + title + ' (' + top.length + ')';
-  if (top.length === 0) return first.concat([header2 + '\nNone']);
-  const entries2 = top.map(
-    (x, i) =>
-      i + 1 + ') ' + x.m.name + ' (' + bracketOf(x.m) + ')' +
-      '\nrate ' + x.rate.toFixed(3) + ' x Score ' + x.m.score.toFixed(3) +
-      ' = ' + x.value.toFixed(3) + (x.m.extra ? '\n' + x.m.extra : '')
-  );
-  const footer =
+  const skipNote =
     skipped > 0 ? skipped + ' match(es) left out: total scored or total conceded is 0, so no rate.' : '';
-  return first.concat(pack(header2, entries2, footer));
+
+  // List A: rate x Score, top 10.
+  const listA = rated.slice().sort((a, b) => b.value - a.value || a.m.order - b.m.order).slice(0, 10);
+  const inA: Record<number, boolean> = {};
+  listA.forEach((x) => {
+    inA[x.m.order] = true;
+  });
+  const header2 = 'OVER RATE x SCORE (top 10) - ' + title + ' (' + listA.length + ')';
+  let out = first;
+  if (listA.length === 0) {
+    out = out.concat([header2 + '\nNone']);
+  } else {
+    const entries2 = listA.map(
+      (x, i) =>
+        i + 1 + ') ' + x.m.name + ' (' + bracketOf(x.m) + ')' +
+        '\nrate ' + x.rate.toFixed(3) + ' x Score ' + x.m.score.toFixed(3) +
+        ' = ' + x.value.toFixed(3) + (x.m.extra ? '\n' + x.m.extra : '')
+    );
+    out = out.concat(pack(header2, entries2, skipNote));
+  }
+
+  // List B: rate x Score 2, top 10. ✅ when the match is also in list A.
+  const listB = rated.slice().sort((a, b) => b.value2 - a.value2 || a.m.order - b.m.order).slice(0, 10);
+  const header3 = 'OVER RATE x SCORE 2 (top 10) - ' + title + ' (' + listB.length + ')';
+  if (listB.length === 0) return out.concat([header3 + '\nNone']);
+  const entries3 = listB.map(
+    (x, i) =>
+      i + 1 + ') ' + x.m.name + (inA[x.m.order] ? ' ✅' : '') + ' (' + bracketOf(x.m) + ')' +
+      '\nrate ' + x.rate.toFixed(3) + ' x Score 2 ' + x.m.score2.toFixed(3) +
+      ' = ' + x.value2.toFixed(3) + (x.m.extra ? '\n' + x.m.extra : '')
+  );
+  return out.concat(pack(header3, entries3, skipNote));
 }
 
 // Basketball OVER: ONE single list, highest Score first. No t groups.
@@ -412,6 +442,7 @@ export async function rankCompetition(
         tHundredths: hsH + asH,
         concedeH: hcH + acH,
         score: overScore(hs, hc, as, ac),
+        score2: overScore2(hs, hc, as, ac),
         extra: when,
         order: i,
       });
@@ -524,6 +555,7 @@ function rankPastedGroup(rows: PastedRow[], basketball: boolean): string[] {
       tHundredths: hsH + asH,
       concedeH: hcH + acH,
       score: overScore(hs, hc, as, ac),
+      score2: overScore2(hs, hc, as, ac),
       extra: league,
       order: i,
     });
