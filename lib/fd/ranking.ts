@@ -10,24 +10,25 @@
 //   Away rx = Away point / Home point. A side qualifies when its rx is 2 or more
 //   (exact integer maths). If the opposing point is 0 the side is eliminated.
 //   A side gets a tick when D2 >= 3 (3 included).
-// DRAW section: a match qualifies when |Home point - Away point| (main D) is between 0.0 and 0.2,
-//   both ends included (exact integer maths). Closest first. A match gets a tick only when
-//   BOTH the main D and D2 are between 0 and 0.2 (included). Each match shows the tag
-//   (main stronger, supporting stronger), e.g. (Home, Away).
-// FOOTBALL OVER RANKING: Score = S = X + Y, X = 2*hs*ac/(hs+ac), Y = 2*as*hc/(as+hc)
+// DRAW section (football only): a match qualifies when |Home point - Away point| (main D) is
+//   between 0.0 and 0.2, both ends included (exact integer maths). Closest first. A match gets
+//   a tick only when BOTH the main D and D2 are between 0 and 0.2 (included). Each match shows
+//   the tag (main stronger, supporting stronger), e.g. (Home, Away).
+// OVER RANKING: Score = S = X + Y, X = 2*hs*ac/(hs+ac), Y = 2*as*hc/(as+hc)
 //   (a zero denominator makes that part 0). t = hs + as = total scored.
-//   ONE single list of every match, Score ascending (lowest first).
-//   Bracket number next to each match: the smaller of (total conceded, total scored),
+//   FOOTBALL main list: every match, highest Score first.
+//   Bracket number next to each football match: the smaller of (total conceded, total scored),
 //   minus 0.5, rounded half up (= whole part of that smaller total). Exact integer maths.
-//   Then a RATE x SCORE list: rate = bigger / smaller of (total scored, total conceded),
-//   value = rate * Score, top 10, descending. Matches with a zero total have no rate.
-//   Then a RATE x SCORE 2 list: Score 2 = ac/(hs+1) + hc/(as+1), same rate,
-//   value 2 = rate * Score 2, top 10, descending. A match that is also in the first
-//   top 10 gets a check mark.
+//   BASKETBALL main list: every match, highest Score first. Bracket number: Score - 10, floored.
+// TOP 10 LISTS (football AND basketball, same rules):
+//   rate = bigger / smaller of (total scored, total conceded). Matches with a zero total have no rate.
+//   List 1: value = rate * Score, top 10, descending.
+//   List 2: Score 2 = min(hs,ac)/(1+max(hs,ac)) + min(as,hc)/(1+max(as,hc)),
+//           value 2 = rate * Score 2, top 10, descending.
+//           A match that is also in list 1 gets a check mark.
 // BASKETBALL (pasted matches only): the word Basketball on the first line of the paste marks
 //   every match in it as basketball (the stored league starts with "Basketball"). Basketball
-//   gets the same WIN ranking and RX 2+ (with the D2 tick), NO Draw, and ONE single Over list
-//   ordered by Score (highest first). BASKETBALL number next to each match: Score - 10, floored.
+//   gets the same WIN ranking and RX 2+ (with the D2 tick), NO Draw, and its own Over lists.
 // Part 1: one competition's stored pending matches (fd_fixtures). Football only.
 // Part 2: the matches pasted into the storage (one list across all leagues).
 import { createAdminClient } from '@/lib/supabase/admin';
@@ -49,9 +50,9 @@ export function overScore(hs: number, hc: number, as: number, ac: number): numbe
   return x + y;
 }
 
-// Score 2 = ac/(hs+1) + hc/(as+1).
+// Score 2 = min(hs,ac)/(1+max(hs,ac)) + min(as,hc)/(1+max(as,hc)).
 export function overScore2(hs: number, hc: number, as: number, ac: number): number {
-  return ac / (hs + 1) + hc / (as + 1);
+  return Math.min(hs, ac) / (1 + Math.max(hs, ac)) + Math.min(as, hc) / (1 + Math.max(as, hc));
 }
 
 type Side = { team: string; point: number; line: string; extra: string; order: number };
@@ -227,23 +228,21 @@ function bracketOf(m: OverItem): number {
   return Math.floor(Math.min(m.concedeH, m.tHundredths) / 100);
 }
 
-// The football OVER RANKING: one single list, Score ascending (lowest first),
-// then RATE x SCORE (top 10), then RATE x SCORE 2 (top 10, ✅ when also in the first top 10).
-// rate = bigger / smaller of (total scored, total conceded).
-function overMessages(title: string, items: OverItem[]): string[] {
-  const header = 'OVER RANKING (highest score first) - ' + title + ' (' + items.length + ')';
-  if (items.length === 0) return [header + '\nNone'];
+// Basketball bracket number: Score - 10, floored. The tiny 1e-9 stops a Score that is
+// exactly on a whole number from dropping a point through floating-point error.
+function bracketBasket(m: OverItem): number {
+  return Math.floor(m.score - 10 + 1e-9);
+}
 
-  const sorted = items.slice().sort((a, b) => b.score - a.score || a.order - b.order);
-  
-  const entries = sorted.map(
-    (m, i) =>
-      i + 1 + ') ' + m.name + ' (' + bracketOf(m) + ')' +
-      '\nt ' + (m.tHundredths / 100).toFixed(2) +
-      ' | Score ' + m.score.toFixed(3) + (m.extra ? '\n' + m.extra : '')
-  );
-  const first = pack(header, entries, '');
-
+// The two TOP 10 lists, shared by football and basketball.
+//   rate = bigger / smaller of (total scored, total conceded).
+//   List 1: rate * Score. List 2: rate * Score 2 (check mark when the match is also in list 1).
+function topLists(
+  title: string,
+  items: OverItem[],
+  bracket: (m: OverItem) => number,
+  prefix: string
+): string[] {
   const rated: { m: OverItem; rate: number; value: number; value2: number }[] = [];
   let skipped = 0;
   items.forEach((m) => {
@@ -259,51 +258,65 @@ function overMessages(title: string, items: OverItem[]): string[] {
   const skipNote =
     skipped > 0 ? skipped + ' match(es) left out: total scored or total conceded is 0, so no rate.' : '';
 
-  // List A: rate x Score, top 10.
+  // List 1: rate x Score, top 10.
   const listA = rated.slice().sort((a, b) => b.value - a.value || a.m.order - b.m.order).slice(0, 10);
   const inA: Record<number, boolean> = {};
   listA.forEach((x) => {
     inA[x.m.order] = true;
   });
-  const header2 = 'OVER RATE x SCORE (top 10) - ' + title + ' (' + listA.length + ')';
-  let out = first;
+  const header1 = prefix + 'OVER RATE x SCORE (top 10) - ' + title + ' (' + listA.length + ')';
+  let out: string[] = [];
   if (listA.length === 0) {
-    out = out.concat([header2 + '\nNone']);
+    out = out.concat([header1 + '\nNone']);
   } else {
-    const entries2 = listA.map(
+    const entries1 = listA.map(
       (x, i) =>
-        i + 1 + ') ' + x.m.name + ' (' + bracketOf(x.m) + ')' +
+        i + 1 + ') ' + x.m.name + ' (' + bracket(x.m) + ')' +
         '\nrate ' + x.rate.toFixed(3) + ' x Score ' + x.m.score.toFixed(3) +
         ' = ' + x.value.toFixed(3) + (x.m.extra ? '\n' + x.m.extra : '')
     );
-    out = out.concat(pack(header2, entries2, skipNote));
+    out = out.concat(pack(header1, entries1, skipNote));
   }
 
-  // List B: rate x Score 2, top 10. ✅ when the match is also in list A.
+  // List 2: rate x Score 2, top 10. Check mark when the match is also in list 1.
   const listB = rated.slice().sort((a, b) => b.value2 - a.value2 || a.m.order - b.m.order).slice(0, 10);
-  const header3 = 'OVER RATE x SCORE 2 (top 10) - ' + title + ' (' + listB.length + ')';
-  if (listB.length === 0) return out.concat([header3 + '\nNone']);
-  const entries3 = listB.map(
+  const header2 = prefix + 'OVER RATE x SCORE 2 (top 10) - ' + title + ' (' + listB.length + ')';
+  if (listB.length === 0) return out.concat([header2 + '\nNone']);
+  const entries2 = listB.map(
     (x, i) =>
-      i + 1 + ') ' + x.m.name + (inA[x.m.order] ? ' ✅' : '') + ' (' + bracketOf(x.m) + ')' +
+      i + 1 + ') ' + x.m.name + (inA[x.m.order] ? ' ✅' : '') + ' (' + bracket(x.m) + ')' +
       '\nrate ' + x.rate.toFixed(3) + ' x Score 2 ' + x.m.score2.toFixed(3) +
       ' = ' + x.value2.toFixed(3) + (x.m.extra ? '\n' + x.m.extra : '')
   );
-  return out.concat(pack(header3, entries3, skipNote));
+  return out.concat(pack(header2, entries2, skipNote));
 }
 
-// Basketball OVER: ONE single list, highest Score first. No t groups.
-// Next to each match: Score - 10, floored.
+// The football OVER RANKING: one single list, highest Score first, then the two top 10 lists.
+function overMessages(title: string, items: OverItem[]): string[] {
+  const header = 'OVER RANKING (highest score first) - ' + title + ' (' + items.length + ')';
+  if (items.length === 0) return [header + '\nNone'];
+
+  const sorted = items.slice().sort((a, b) => b.score - a.score || a.order - b.order);
+  const entries = sorted.map(
+    (m, i) =>
+      i + 1 + ') ' + m.name + ' (' + bracketOf(m) + ')' +
+      '\nt ' + (m.tHundredths / 100).toFixed(2) +
+      ' | Score ' + m.score.toFixed(3) + (m.extra ? '\n' + m.extra : '')
+  );
+  return pack(header, entries, '').concat(topLists(title, items, bracketOf, ''));
+}
+
+// The basketball OVER RANKING: one single list, highest Score first, then the two top 10 lists.
 function overBasketballMessages(title: string, items: OverItem[]): string[] {
   const header = 'BASKETBALL OVER RANKING - ' + title + ' (' + items.length + ')';
   if (items.length === 0) return [header + '\nNone'];
   const sorted = items.slice().sort((a, b) => b.score - a.score || a.order - b.order);
   const entries = sorted.map(
     (m, i) =>
-      i + 1 + ') ' + m.name + ' (' + Math.floor(m.score - 10 + 1e-9) + ')' +
+      i + 1 + ') ' + m.name + ' (' + bracketBasket(m) + ')' +
       '\nScore ' + m.score.toFixed(3) + (m.extra ? '\n' + m.extra : '')
   );
-  return pack(header, entries, '');
+  return pack(header, entries, '').concat(topLists(title, items, bracketBasket, 'BASKETBALL '));
 }
 
 // Builds the draw tag and tick for one match (averages already in hundredths).
