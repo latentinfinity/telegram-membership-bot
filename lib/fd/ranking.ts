@@ -231,10 +231,11 @@ function bracketOf(m: OverItem): number {
 // then RATE x SCORE (top 10), then RATE x SCORE 2 (top 10, ✅ when also in the first top 10).
 // rate = bigger / smaller of (total scored, total conceded).
 function overMessages(title: string, items: OverItem[]): string[] {
-  const header = 'OVER RANKING (lowest score first) - ' + title + ' (' + items.length + ')';
+  const header = 'OVER RANKING (highest score first) - ' + title + ' (' + items.length + ')';
   if (items.length === 0) return [header + '\nNone'];
 
-  const sorted = items.slice().sort((a, b) => a.score - b.score || a.order - b.order);
+  const sorted = items.slice().sort((a, b) => b.score - a.score || a.order - b.order);
+  
   const entries = sorted.map(
     (m, i) =>
       i + 1 + ') ' + m.name + ' (' + bracketOf(m) + ')' +
