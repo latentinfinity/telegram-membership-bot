@@ -21,7 +21,8 @@
 //   minus 0.5, rounded half up (= whole part of that smaller total). Exact integer maths.
 //   BASKETBALL main list: every match, highest Score first. Bracket number: Score - 10, floored.
 // TOP 10 LISTS (football AND basketball, same rules):
-//   rate = bigger / smaller of (total scored, total conceded). Matches with a zero total have no rate.
+//   rate = ((small + big) / 2) * (small / big), where small / big are the smaller / bigger of
+//   (total scored, total conceded). Matches with a zero total have no rate.
 //   List 1: value = rate * Score, top 10, descending.
 //   List 2: Score 2 = min(hs,ac)/(1+max(hs,ac)) + min(as,hc)/(1+max(as,hc)),
 //           value 2 = rate * Score 2, top 10, descending.
@@ -235,7 +236,9 @@ function bracketBasket(m: OverItem): number {
 }
 
 // The two TOP 10 lists, shared by football and basketball.
-//   rate = bigger / smaller of (total scored, total conceded).
+//   rate = ((small + big) / 2) * (small / big), small / big = smaller / bigger of
+//   (total scored, total conceded). Totals are in hundredths, so (small + big) / 200 is the
+//   average of the two in real units.
 //   List 1: rate * Score. List 2: rate * Score 2 (check mark when the match is also in list 1).
 function topLists(
   title: string,
@@ -248,15 +251,15 @@ function topLists(
   items.forEach((m) => {
     const big = Math.max(m.concedeH, m.tHundredths);
     const small = Math.min(m.concedeH, m.tHundredths);
-    if (small <= 0) {
+    if (big <= 0) {
       skipped++;
       return;
     }
-    const rate = big / small;
+    const rate = ((small + big) / 200) * (small / big);
     rated.push({ m, rate, value: rate * m.score, value2: rate * m.score2 });
   });
   const skipNote =
-    skipped > 0 ? skipped + ' match(es) left out: total scored or total conceded is 0, so no rate.' : '';
+    skipped > 0 ? skipped + ' match(es) left out: total scored and total conceded are both 0, so no rate.' : '';
 
   // List 1: rate x Score, top 10.
   const listA = rated.slice().sort((a, b) => b.value - a.value || a.m.order - b.m.order).slice(0, 10);
