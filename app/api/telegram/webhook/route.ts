@@ -92,6 +92,7 @@ import { handleTicketsButton, handleTicketsAdd } from '@/lib/ticketsUi'; // NEW
 import { handleAd2Reply } from '@/lib/ad2Admin'; // NEW (1win Ad)
 import { handleFbReply } from '@/lib/fb/fbAdmin'; // NEW (Facebook)
 import { handleChannelPost } from '@/lib/fb/teaser'; // NEW (Facebook)
+import { handleMasButton, handleMasNewReply, handleMasTicketReply } from '@/lib/masUi'; // NEW (named cycles)
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
@@ -738,6 +739,8 @@ async function handleAdminButton(
       await sendMessage(chatId, next ? 'AI replies enabled.' : 'AI replies disabled.');
     }
     await showEngagementMenu(chatId);
+  } else if (data.startsWith('a_mas_')) {
+    await handleMasButton(data, chatId, adminId);
   } else if (data === 'a_mas_menu') {
     await clearDraft(adminId);
     await showMasanielloMenu(chatId);
@@ -1153,9 +1156,9 @@ export async function POST(req: Request) {
         } else if (promptCommand.startsWith('fb_')) {
           await handleFbReply(chatId, promptCommand, text); // NEW (Facebook)
         } else if (promptCommand === 'mas_new') {
-          await handleMasanielloNew(chatId, from.id, text);
+          await handleMasNewReply(chatId, from.id, text);
         } else if (promptCommand === 'mas_ticket') {
-          await handleMasanielloTicket(chatId, text);
+          await handleMasTicketReply(chatId, text);
         } else if (promptCommand === 'predict') {
           await handlePredict(chatId, text);
         } else if (promptCommand === 'tk_add') {

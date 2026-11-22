@@ -18,9 +18,9 @@ export const PROMPTS = {
   engReplyLimits:
     'Send max replies per day,cooldown minutes.\nExample: 20,3',
   masNew:
-    'Send the new cycle as: bankroll,N,K,odds\nExample: 1000,5,3,2.00\n(bankroll in naira, N = total bets, K = wins needed, odds = reference odds)',
+    'Send the new cycle as: name | bankroll,N,K,odds\nExample: Roll1 | 1000,61,41,2.00\n(name = up to 30 characters, bankroll in naira, N = total bets, K = wins needed, odds = reference odds)',
   masTicket:
-    'Send the next ticket as: odds | prediction\nExample: 1.85 | Arsenal & Chelsea over 1.5\n(odds = final odds of this ticket, single or combined; the prediction text is optional)',
+    'Send the next ticket as: name | odds | prediction\nExample: Roll1 | 1.85 | Arsenal & Chelsea over 1.5\n(name = the cycle name, odds = final odds of this ticket, single or combined; the prediction text is optional)',
   predict:
     'Paste your matches now.\nFormat (time and form are optional):\n1) 20:45 Home - Away\nldlwl,wdwwl,1.2,1.42,2.5,1.6\nThe four numbers are: home scored, home conceded, away scored, away conceded.',
   tkAdd:

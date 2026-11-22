@@ -690,7 +690,11 @@ export async function undoLastSettlement(cycleId: string): Promise<UndoOutcome> 
     return { ok: false, error: 'A cancelled cycle cannot be reopened.' };
   }
   if (cycle.status !== 'active') {
-    const other = await getActiveCycle();
+    const activeNow = await supabase.from('masaniello_cycles').select('id, label').eq('status', 'active');
+    const mine = (cycle.label || '').toLowerCase().replace(/\s+/g, ' ').trim();
+    const other = ((activeNow.data ?? []) as unknown as { id: string; label: string | null }[]).find(
+      (c) => c.id !== cycle.id && (c.label || '').toLowerCase().replace(/\s+/g, ' ').trim() === mine
+    );
     if (other) {
       return {
         ok: false,
