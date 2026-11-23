@@ -55,6 +55,15 @@ export function overScore2(hs: number, hc: number, as: number, ac: number): numb
   return Math.min(hs, ac) / (1 + Math.max(hs, ac)) + Math.min(as, hc) / (1 + Math.max(as, hc));
 }
 
+// Rate used by the two top 10 lists and by Tracking: bigger / smaller of
+// (total scored, total conceded), both in hundredths. null when the smaller one is 0.
+export function overRate(concedeH: number, tHundredths: number): number | null {
+  const big = Math.max(concedeH, tHundredths);
+  const small = Math.min(concedeH, tHundredths);
+  if (small <= 0) return null;
+  return big / small;
+}
+
 type Side = { team: string; point: number; line: string; extra: string; order: number };
 type RxItem = { team: string; rx: number; tick: boolean; line: string; extra: string; order: number };
 type DrawEntry = {
@@ -89,7 +98,7 @@ function hundredths(n: number): number {
 //   Home point = hs*ac / ((100+hc)*(100+as))
 //   Away point = as*hc / ((100+ac)*(100+hs))
 //   |Nh/Dh - Na/Da| <= 1/5  <=>  5 * |Nh*Da - Na*Dh| <= Dh*Da
-function isDraw(hs: number, hc: number, as: number, ac: number): boolean {
+export function isDraw(hs: number, hc: number, as: number, ac: number): boolean {
   const B = (n: number) => BigInt(n);
   const hundred = B(100);
   const nh = B(hs) * B(ac);
@@ -116,7 +125,7 @@ function mainStronger(hs: number, hc: number, as: number, ac: number): 'Home' | 
 // Exact RX test with the four averages in hundredths.
 //   Home rx = Hp / Ap >= 2  <=>  Nh*Da >= 2*Na*Dh, and needs Ap > 0 (Na > 0)
 //   Away rx = Ap / Hp >= 2  <=>  Na*Dh >= 2*Nh*Da, and needs Hp > 0 (Nh > 0)
-function rxQualifies(hs: number, hc: number, as: number, ac: number): { home: boolean; away: boolean } {
+export function rxQualifies(hs: number, hc: number, as: number, ac: number): { home: boolean; away: boolean } {
   const B = (n: number) => BigInt(n);
   const zero = B(0);
   const two = B(2);
@@ -246,13 +255,11 @@ function topLists(
   const rated: { m: OverItem; rate: number; value: number; value2: number }[] = [];
   let skipped = 0;
   items.forEach((m) => {
-    const big = Math.max(m.concedeH, m.tHundredths);
-    const small = Math.min(m.concedeH, m.tHundredths);
-    if (small <= 0) {
+    const rate = overRate(m.concedeH, m.tHundredths);
+    if (rate === null) {
       skipped++;
       return;
     }
-    const rate = big / small;
     rated.push({ m, rate, value: rate * m.score, value2: rate * m.score2 });
   });
   const skipNote =

@@ -47,6 +47,7 @@ import { planRollS1, formatRollS1 } from '@/lib/fd/rollTickets';
 import { planOver15, formatO15 } from '@/lib/fd/rollOver15';
 import { planOutcome, formatOutcome } from '@/lib/fd/outcomeTickets';
 import { listRankComps, rankCompetition, rankPasted } from '@/lib/fd/ranking';
+import { listTrackComps, trackMessages } from '@/lib/fd/track';
 import { runManual } from '@/lib/fd/manual';
 import { handlePostAdmin } from '@/lib/fd/postAdmin';
 import { handleAd2Button } from '@/lib/ad2Admin';
@@ -86,6 +87,7 @@ function tkMenu(storedCount: number): InlineKeyboard {
     rows.push([{ text: '🗑 Clear Matches', callback_data: 'a_tk_clear' }]);
   }
   rows.push([{ text: '📊 Rankings', callback_data: 'a_tk_rk' }]);
+  rows.push([{ text: '🧪 Tracking', callback_data: 'a_tk_tr' }]);
   rows.push([{ text: '🔢 Correct Score X:Y', callback_data: 'a_tk_xs' }]);
   rows.push([{ text: '📡 Auto Posting', callback_data: 'a_tk_ap' }]);
   rows.push([{ text: '💬 Facebook', callback_data: 'a_tk_fb' }]);
@@ -580,6 +582,47 @@ async function handleTicketsXsPasted(chatId: number) {
   }
 }
 
+// ── Tracking (read only): averages of what came true, per league and all ──
+function tkTrBack(): InlineKeyboard {
+  return [
+    [{ text: '🧪 Tracking', callback_data: 'a_tk_tr' }],
+    [{ text: '⬅️ Tickets Menu', callback_data: 'a_tk_menu' }],
+  ];
+}
+
+async function handleTicketsTrackMenu(chatId: number) {
+  const r = await listTrackComps();
+  const rows: InlineKeyboard = [];
+  let text = 'TRACKING\n\nAverages of the ranking numbers for matches that already finished. Pick a league, or All.';
+  if (r.ok) {
+    if (r.total > 0) rows.push([{ text: 'All leagues (' + r.total + ')', callback_data: 'a_tk_tr_all' }]);
+    r.comps.forEach((c) => {
+      rows.push([{ text: c.name + ' (' + c.count + ')', callback_data: 'a_tk_tr_c_' + c.code }]);
+    });
+    if (r.total === 0) text += '\n\nNothing is tracked yet. Matches appear here after they are graded.';
+  } else {
+    text += '\n\nCould not read the tracking (' + r.error + ').';
+  }
+  rows.push([{ text: '⬅️ Tickets Menu', callback_data: 'a_tk_menu' }]);
+  await sendMessage(chatId, text, rows);
+}
+
+async function handleTicketsTrackShow(chatId: number, code: string | null) {
+  if (code !== null && !/^[A-Z0-9]{2,6}$/.test(code)) {
+    await sendMessage(chatId, 'That competition code is not valid.', tkTrBack());
+    return;
+  }
+  const r = await trackMessages(code);
+  if (!r.ok) {
+    await sendMessage(chatId, '❌ Could not build the tracking: ' + r.error, tkTrBack());
+    return;
+  }
+  for (let i = 0; i < r.messages.length; i++) {
+    if (i === r.messages.length - 1) await sendMessage(chatId, r.messages[i], tkTrBack());
+    else await sendMessage(chatId, r.messages[i]);
+  }
+}
+
 // ── Team Over Lists (read only): the same rules as the automatic posts ────
 // Sent to this private chat only. Nothing goes to the channel or the group.
 async function handleTicketsTeamOver(chatId: number) {
@@ -802,6 +845,12 @@ export async function handleTicketsButton(
     await handleTicketsXsComp(chatId, data.slice('a_tk_xs_c_'.length));
   } else if (data === 'a_tk_xs_p') {
     await handleTicketsXsPasted(chatId);
+  } else if (data === 'a_tk_tr') {
+    await handleTicketsTrackMenu(chatId);
+  } else if (data === 'a_tk_tr_all') {
+    await handleTicketsTrackShow(chatId, null);
+  } else if (data.indexOf('a_tk_tr_c_') === 0) {
+    await handleTicketsTrackShow(chatId, data.slice('a_tk_tr_c_'.length));
   } else if (data === 'a_tk_to') {
     await handleTicketsTeamOver(chatId);
   } else if (data === 'a_tk_cs') {
