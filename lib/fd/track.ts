@@ -1,10 +1,12 @@
-// lib/fd/track.ts - Tracking: average ranking numbers of what came true vs what did not.
+// lib/fd/track.ts - Tracking: average ranking numbers of what came true, and the lift against the rest.
 // League matches only (pasted matches have no results). Read only, except copyTracked().
 //   copyTracked(): copies newly graded fd_fixtures rows into fd_track (permanent: only the
 //   four averages and the real score), so the 30-day cleanup never loses them.
 //   WIN: every side's main point; won = that team scored more. RX 2+ sides: rx value.
 //   DRAW: matches in the Draw list, difference |Home point - Away point|; hit = ended level.
 //   OVER: Score, Score 2, Value 1, Value 2 (rate x score); hit = 3 or more goals.
+//   LIFT = Main / (Main + Others) x 100, where Main = average of the ones that came true and
+//   Others = average of the rest. 50 = no difference.
 import { createAdminClient } from '@/lib/supabase/admin';
 import { homePoint, awayPoint, overScore, overScore2, overRate, rxQualifies, isDraw } from '@/lib/fd/ranking';
 
@@ -177,11 +179,19 @@ function avg(sum: number, n: number): string {
 function pct(a: Acc): string {
   return a.n > 0 ? Math.round((a.won * 100) / a.n) + '%' : '-';
 }
-function line(label: string, a: Acc, hitWord: string, otherWord: string): string {
-  return (
-    label + '   ' + hitWord + ' ' + avg(a.sumWon, a.won) + ' | ' + otherWord + ' ' +
-    avg(a.sumOther, a.n - a.won) + '   (n ' + a.n + ')'
-  );
+
+// One line: the average of the ones that came true, and the lift against the rest.
+// lift = Main / (Main + Others) x 100. 50 = no difference.
+function line(label: string, a: Acc, hitWord: string, _otherWord: string): string {
+  const otherN = a.n - a.won;
+  let lift = '-';
+  if (a.won > 0 && otherN > 0) {
+    const main = a.sumWon / a.won;
+    const others = a.sumOther / otherN;
+    const t = main + others;
+    if (t > 0) lift = ((main / t) * 100).toFixed(1);
+  }
+  return label + '   ' + hitWord + ' ' + avg(a.sumWon, a.won) + ' | lift ' + lift + '   (n ' + a.n + ')';
 }
 
 export async function trackMessages(
@@ -285,7 +295,8 @@ export async function trackMessages(
     out.push(line('Value 1', v1, 'over', 'not over'));
     out.push(line('Value 2', v2, 'over', 'not over'));
     out.push('');
-    out.push('"Others" = sides or matches that did not win, did not end level, or did not go over.');
+    out.push('Lift = winners avg / (winners avg + others avg) x 100. 50 = no difference. Above 60 = the winners score clearly higher than the others.');
+    out.push('Draw: a draw has a SMALL difference, so a lift below 50 is the good sign there.');
     out.push('Averages of matches that already finished. No accuracy is promised.');
     return { ok: true, messages: [out.join('\n')] };
   } catch (e) {
