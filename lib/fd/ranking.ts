@@ -9,30 +9,32 @@
 // RX 2+ section (after the main list, before DRAW): Home rx = Home point / Away point,
 //   Away rx = Away point / Home point. A side qualifies when its rx is 2 or more
 //   (exact integer maths). If the opposing point is 0 the side is eliminated.
-//   A side gets a tick when D2 >= 3 (3 included).
+//   A side gets a check mark when D2 >= 3 (3 included).
+//   A side gets a star when its own X:Y number (score 2 x average scored, rounded half up)
+//   is bigger than its opponent's. A tie gets no star.
 // DRAW section (football only): a match qualifies when |Home point - Away point| (main D) is
 //   between 0.0 and 0.2, both ends included (exact integer maths). Closest first. A match gets
 //   a tick only when BOTH the main D and D2 are between 0 and 0.2 (included). Each match shows
 //   the tag (main stronger, supporting stronger), e.g. (Home, Away).
-// OVER RANKING: Score = S = X + Y, X = 2*hs*ac/(hs+ac), Y = 2*as*hc/(as+hc)
-//   (a zero denominator makes that part 0). t = hs + as = total scored.
-//   FOOTBALL main list: every match, highest Score first.
-//   Bracket number next to each football match: the smaller of (total conceded, total scored),
-//   minus 0.5, rounded half up (= whole part of that smaller total). Exact integer maths.
-//   BASKETBALL main list: every match, highest Score first. Bracket number: Score - 10, floored.
+// SCORE 2 = min(hs,ac)/(1+max(hs,ac)) + min(as,hc)/(1+max(as,hc)). Its home part and away part
+//   give X:Y: X = home part * hs, Y = away part * as, each rounded half up (0.5 up).
+// f = Score 2 * total scored (t = hs + as), rounded to 2 decimals.
+// FOOTBALL OVER RANKING (main list): every match with f of 2.00 or more, ranked by f, highest first.
+//   The number in brackets is f. Matches with f below 2.00 are removed.
+// BASKETBALL main list: every match, highest Score (X + Y) first. Bracket number: Score - 10, floored.
 // TOP 10 LISTS (football AND basketball, same rules):
 //   rate = bigger / smaller of (total scored, total conceded). Matches with a zero total have no rate.
-//   List 1: value = rate * Score, top 10, descending. Bracket: as in the main list.
-//   List 2: Score 2 = min(hs,ac)/(1+max(hs,ac)) + min(as,hc)/(1+max(as,hc)),
-//           value 2 = rate * Score 2, top 10, descending.
-//           Bracket: Score 2 * total scored, to 2 decimals.
+//   List 1: value = rate * Score, top 10, descending. Bracket: football = whole part of the smaller
+//           total, basketball = Score - 10 floored.
+//   List 2: value 2 = rate * Score 2, top 10, descending. Bracket: f.
 //           A match that is also in list 1 gets a check mark.
 // BASKETBALL (pasted matches only): the word Basketball on the first line of the paste marks
 //   every match in it as basketball (the stored league starts with "Basketball"). Basketball
-//   gets the same WIN ranking and RX 2+ (with the D2 tick), NO Draw, and its own Over lists.
+//   gets the same WIN ranking and RX 2+ (with the D2 tick and the X:Y star), NO Draw, and its Over lists.
 // Part 1: one competition's stored pending matches (fd_fixtures). Football only.
 // Part 2: the matches pasted into the storage (one list across all leagues).
-// isDraw, rxQualifies, overRate and the score functions are exported for lib/fd/track.ts.
+// Exported for lib/fd/track.ts and lib/fd/scoreXY.ts: isDraw, rxQualifies, overRate, the score
+// functions, fHundredths and score2Xy.
 import { createAdminClient } from '@/lib/supabase/admin';
 
 const LIMIT = 3500;
@@ -57,6 +59,45 @@ export function overScore2(hs: number, hc: number, as: number, ac: number): numb
   return Math.min(hs, ac) / (1 + Math.max(hs, ac)) + Math.min(as, hc) / (1 + Math.max(as, hc));
 }
 
+// f = Score 2 * total scored, in hundredths (rounded to 2 decimals as shown).
+export function fHundredths(hs: number, hc: number, as: number, ac: number): number {
+  return Math.round(overScore2(hs, hc, as, ac) * (hs + as) * 100);
+}
+
+// Rounds num/den half up (0.5 goes up), exact. num >= 0, den > 0.
+function roundHalfUp(num: bigint, den: bigint): number {
+  const two = BigInt(2);
+  return Number((two * num + den) / (two * den));
+}
+
+// X:Y from Score 2. Averages are given in hundredths.
+//   X = (min(hs,ac) / (1 + max(hs,ac))) * hs      (home part of Score 2 * home scored)
+//   Y = (min(as,hc) / (1 + max(as,hc))) * as      (away part of Score 2 * away scored)
+// x and y are rounded half up; rawX and rawY are the unrounded numbers.
+export function score2Xy(
+  hsH: number,
+  hcH: number,
+  asH: number,
+  acH: number
+): { x: number; y: number; rawX: number; rawY: number } {
+  const B = (n: number) => BigInt(n);
+  const hundred = B(100);
+  const m1 = Math.min(hsH, acH);
+  const M1 = Math.max(hsH, acH);
+  const m2 = Math.min(asH, hcH);
+  const M2 = Math.max(asH, hcH);
+  const num1 = B(m1) * B(hsH);
+  const den1 = (hundred + B(M1)) * hundred;
+  const num2 = B(m2) * B(asH);
+  const den2 = (hundred + B(M2)) * hundred;
+  return {
+    x: roundHalfUp(num1, den1),
+    y: roundHalfUp(num2, den2),
+    rawX: Number(num1) / Number(den1),
+    rawY: Number(num2) / Number(den2),
+  };
+}
+
 // Rate used by the two top 10 lists and by Tracking: bigger / smaller of
 // (total scored, total conceded), both in hundredths. null when the smaller one is 0.
 export function overRate(concedeH: number, tHundredths: number): number | null {
@@ -67,7 +108,15 @@ export function overRate(concedeH: number, tHundredths: number): number | null {
 }
 
 type Side = { team: string; point: number; line: string; extra: string; order: number };
-type RxItem = { team: string; rx: number; tick: boolean; line: string; extra: string; order: number };
+type RxItem = {
+  team: string;
+  rx: number;
+  tick: boolean;
+  star: boolean;
+  line: string;
+  extra: string;
+  order: number;
+};
 type DrawEntry = {
   label: string;
   home: number;
@@ -84,6 +133,7 @@ type OverItem = {
   concedeH: number; // home conceded + away conceded in hundredths, exact
   score: number;
   score2: number;
+  fH: number; // f = Score 2 * total scored, in hundredths
   extra: string;
   order: number;
 };
@@ -206,14 +256,15 @@ function rankedEntries(sides: Side[]): string[] {
   );
 }
 
-// The RX 2+ section: one descending list, highest rx first. Tick when D2 >= 3.
+// The RX 2+ section: one descending list, highest rx first.
+// Check mark when D2 >= 3. Star when the side's X:Y number is bigger than its opponent's.
 function rxMessages(title: string, items: RxItem[]): string[] {
   const header = 'RX 2+ - ' + title + ' (' + items.length + ')';
   if (items.length === 0) return [header + '\nNone'];
   const sorted = items.slice().sort((a, b) => b.rx - a.rx || a.order - b.order);
   const entries = sorted.map(
     (x, i) =>
-      i + 1 + ') ' + x.team + (x.tick ? ' ✅' : '') + '   rx ' + x.rx.toFixed(3) +
+      i + 1 + ') ' + x.team + (x.tick ? ' ✅' : '') + (x.star ? ' ⭐' : '') + '   rx ' + x.rx.toFixed(3) +
       '\n' + x.line + (x.extra ? '\n' + x.extra : '')
   );
   return pack(header, entries, '');
@@ -233,8 +284,8 @@ function drawMessages(title: string, draws: DrawEntry[]): string[] {
   return pack(header, entries, '');
 }
 
-// Football bracket number: the smaller of (total conceded, total scored), minus 0.5,
-// rounded half up = whole part of that smaller total. Values are in hundredths.
+// Football bracket number (top 10 list 1): the smaller of (total conceded, total scored),
+// minus 0.5, rounded half up = whole part of that smaller total. Values are in hundredths.
 function bracketOf(m: OverItem): number {
   return Math.floor(Math.min(m.concedeH, m.tHundredths) / 100);
 }
@@ -248,7 +299,7 @@ function bracketBasket(m: OverItem): number {
 // The two TOP 10 lists, shared by football and basketball.
 //   rate = bigger / smaller of (total scored, total conceded).
 //   List 1: rate * Score. List 2: rate * Score 2 (check mark when the match is also in list 1).
-//   List 2 bracket: Score 2 * total scored, to 2 decimals.
+//   List 2 bracket: f (Score 2 * total scored, 2 decimals).
 function topLists(
   title: string,
   items: OverItem[],
@@ -295,26 +346,37 @@ function topLists(
   const entries2 = listB.map(
     (x, i) =>
       i + 1 + ') ' + x.m.name + (inA[x.m.order] ? ' ✅' : '') +
-      ' (' + ((x.m.score2 * x.m.tHundredths) / 100).toFixed(2) + ')' +
+      ' (' + (x.m.fH / 100).toFixed(2) + ')' +
       '\nrate ' + x.rate.toFixed(3) + ' x Score 2 ' + x.m.score2.toFixed(3) +
       ' = ' + x.value2.toFixed(3) + (x.m.extra ? '\n' + x.m.extra : '')
   );
   return out.concat(pack(header2, entries2, skipNote));
 }
 
-// The football OVER RANKING: one single list, highest Score first, then the two top 10 lists.
+// The football OVER RANKING: ranked by f (Score 2 x total scored), highest first.
+// Matches with f below 2.00 are removed. The number in brackets is f. Then the two top 10 lists.
 function overMessages(title: string, items: OverItem[]): string[] {
-  const header = 'OVER RANKING (highest score first) - ' + title + ' (' + items.length + ')';
-  if (items.length === 0) return [header + '\nNone'];
+  if (items.length === 0) return ['OVER RANKING (f, highest first) - ' + title + ' (0)\nNone'];
 
-  const sorted = items.slice().sort((a, b) => b.score - a.score || a.order - b.order);
-  const entries = sorted.map(
-    (m, i) =>
-      i + 1 + ') ' + m.name + ' (' + bracketOf(m) + ')' +
-      '\nt ' + (m.tHundredths / 100).toFixed(2) +
-      ' | Score ' + m.score.toFixed(3) + (m.extra ? '\n' + m.extra : '')
-  );
-  return pack(header, entries, '').concat(topLists(title, items, bracketOf, ''));
+  const kept = items.filter((m) => m.fH >= 200);
+  const removed = items.length - kept.length;
+  const header = 'OVER RANKING (f, highest first) - ' + title + ' (' + kept.length + ')';
+  const footer = removed > 0 ? removed + ' match(es) with f below 2.00 are not listed.' : '';
+
+  let first: string[];
+  if (kept.length === 0) {
+    first = [header + '\nNone' + (footer ? '\n\n' + footer : '')];
+  } else {
+    const sorted = kept.slice().sort((a, b) => b.fH - a.fH || a.order - b.order);
+    const entries = sorted.map(
+      (m, i) =>
+        i + 1 + ') ' + m.name + ' (' + (m.fH / 100).toFixed(2) + ')' +
+        '\nt ' + (m.tHundredths / 100).toFixed(2) +
+        ' | Score 2 ' + m.score2.toFixed(3) + (m.extra ? '\n' + m.extra : '')
+    );
+    first = pack(header, entries, footer);
+  }
+  return first.concat(topLists(title, items, bracketOf, ''));
 }
 
 // The basketball OVER RANKING: one single list, highest Score first, then the two top 10 lists.
@@ -443,11 +505,12 @@ export async function rankCompetition(
       const q = rxQualifies(hsH, hcH, asH, acH);
       const sup = support(hsH, hcH, asH, acH);
       const rxTick = sup !== null && sup.big;
+      const xy = score2Xy(hsH, hcH, asH, acH);
       if (q.home) {
-        rxItems.push({ team: r.home_name, rx: hp / ap, tick: rxTick, line: 'Home vs ' + r.away_name, extra: when, order: i * 2 });
+        rxItems.push({ team: r.home_name, rx: hp / ap, tick: rxTick, star: xy.x > xy.y, line: 'Home vs ' + r.away_name, extra: when, order: i * 2 });
       }
       if (q.away) {
-        rxItems.push({ team: r.away_name, rx: ap / hp, tick: rxTick, line: 'Away at ' + r.home_name, extra: when, order: i * 2 + 1 });
+        rxItems.push({ team: r.away_name, rx: ap / hp, tick: rxTick, star: xy.y > xy.x, line: 'Away at ' + r.home_name, extra: when, order: i * 2 + 1 });
       }
       if (isDraw(hsH, hcH, asH, acH)) {
         const info = drawInfo(hsH, hcH, asH, acH);
@@ -468,6 +531,7 @@ export async function rankCompetition(
         concedeH: hcH + acH,
         score: overScore(hs, hc, as, ac),
         score2: overScore2(hs, hc, as, ac),
+        fH: fHundredths(hs, hc, as, ac),
         extra: when,
         order: i,
       });
@@ -556,11 +620,12 @@ function rankPastedGroup(rows: PastedRow[], basketball: boolean): string[] {
     const q = rxQualifies(hsH, hcH, asH, acH);
     const sup = support(hsH, hcH, asH, acH);
     const rxTick = sup !== null && sup.big;
+    const xy = score2Xy(hsH, hcH, asH, acH);
     if (q.home) {
-      rxItems.push({ team: homeName, rx: hp / ap, tick: rxTick, line: 'Home vs ' + awayName, extra: league, order: i * 2 });
+      rxItems.push({ team: homeName, rx: hp / ap, tick: rxTick, star: xy.x > xy.y, line: 'Home vs ' + awayName, extra: league, order: i * 2 });
     }
     if (q.away) {
-      rxItems.push({ team: awayName, rx: ap / hp, tick: rxTick, line: 'Away at ' + homeName, extra: league, order: i * 2 + 1 });
+      rxItems.push({ team: awayName, rx: ap / hp, tick: rxTick, star: xy.y > xy.x, line: 'Away at ' + homeName, extra: league, order: i * 2 + 1 });
     }
     if (!basketball && isDraw(hsH, hcH, asH, acH)) {
       const info = drawInfo(hsH, hcH, asH, acH);
@@ -581,6 +646,7 @@ function rankPastedGroup(rows: PastedRow[], basketball: boolean): string[] {
       concedeH: hcH + acH,
       score: overScore(hs, hc, as, ac),
       score2: overScore2(hs, hc, as, ac),
+      fH: fHundredths(hs, hc, as, ac),
       extra: league,
       order: i,
     });

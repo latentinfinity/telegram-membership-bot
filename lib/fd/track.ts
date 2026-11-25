@@ -7,8 +7,11 @@
 //   OVER: Score, Score 2, Value 1, Value 2 (rate x score); hit = 3 or more goals.
 //   LIFT = Main / (Main + Others) x 100, where Main = average of the ones that came true and
 //   Others = average of the rest. 50 = no difference.
+//   f BANDS: f = Score 2 x total scored (2 decimals). Band 3+ = 3.00 to 3.99, 4+ = 4.00 to 4.99,
+//   5+ = 5.00 and above. Reports how often each band produced Over 1.5 (2+ goals),
+//   Over 2.5 (3+ goals) and Over 3.5 (4+ goals).
 import { createAdminClient } from '@/lib/supabase/admin';
-import { homePoint, awayPoint, overScore, overScore2, overRate, rxQualifies, isDraw } from '@/lib/fd/ranking';
+import { homePoint, awayPoint, overScore, overScore2, overRate, rxQualifies, isDraw, fHundredths } from '@/lib/fd/ranking';
 
 const PAGE = 1000;
 const MAX_PAGES = 40;
@@ -194,6 +197,13 @@ function line(label: string, a: Acc, hitWord: string, _otherWord: string): strin
   return label + '   ' + hitWord + ' ' + avg(a.sumWon, a.won) + ' | lift ' + lift + '   (n ' + a.n + ')';
 }
 
+// f band counters: how many matches, and how many had 2+, 3+ and 4+ goals.
+type FBand = { n: number; o15: number; o25: number; o35: number };
+const newBand = (): FBand => ({ n: 0, o15: 0, o25: 0, o35: 0 });
+function fpct(hits: number, n: number): string {
+  return n > 0 ? Math.round((hits * 100) / n) + '% (' + hits + ' of ' + n + ')' : '-';
+}
+
 export async function trackMessages(
   code: string | null
 ): Promise<{ ok: true; messages: string[] } | { ok: false; error: string }> {
@@ -218,6 +228,9 @@ export async function trackMessages(
     const s2 = newAcc();
     const v1 = newAcc();
     const v2 = newAcc();
+    const f3 = newBand();
+    const f4 = newBand();
+    const f5 = newBand();
     let matches = 0;
     let overCount = 0;
     let drawMatches = 0;
@@ -254,7 +267,8 @@ export async function trackMessages(
         addTo(drawAcc, Math.abs(hp - ap), level);
       }
 
-      const over = rh + ra >= 3;
+      const goals = rh + ra;
+      const over = goals >= 3;
       if (over) overCount++;
       const sc1 = overScore(hs, hc, as, ac);
       const sc2 = overScore2(hs, hc, as, ac);
@@ -264,6 +278,21 @@ export async function trackMessages(
       if (rate !== null) {
         addTo(v1, rate * sc1, over);
         addTo(v2, rate * sc2, over);
+      }
+
+      // f bands: 5+ (5.00 and above), 4+ (4.00 to 4.99), 3+ (3.00 to 3.99).
+      const fH = fHundredths(hs, hc, as, ac);
+      if (fH >= 500) {
+        f5.n++;
+        if (goals >= 4) f5.o35++;
+      } else if (fH >= 400) {
+        f4.n++;
+        if (goals >= 4) f4.o35++;
+        if (goals >= 3) f4.o25++;
+      } else if (fH >= 300) {
+        f3.n++;
+        if (goals >= 3) f3.o25++;
+        if (goals >= 2) f3.o15++;
       }
     });
 
@@ -295,8 +324,19 @@ export async function trackMessages(
     out.push(line('Value 1', v1, 'over', 'not over'));
     out.push(line('Value 2', v2, 'over', 'not over'));
     out.push('');
+    out.push('f BANDS (f = Score 2 x total scored)');
+    out.push('f 3+ (3.00 to 3.99): ' + f3.n + ' matches');
+    out.push('  Over 2.5: ' + fpct(f3.o25, f3.n));
+    out.push('  Over 1.5: ' + fpct(f3.o15, f3.n));
+    out.push('f 4+ (4.00 to 4.99): ' + f4.n + ' matches');
+    out.push('  Over 3.5: ' + fpct(f4.o35, f4.n));
+    out.push('  Over 2.5: ' + fpct(f4.o25, f4.n));
+    out.push('f 5+ (5.00 and above): ' + f5.n + ' matches');
+    out.push('  Over 3.5: ' + fpct(f5.o35, f5.n));
+    out.push('');
     out.push('Lift = winners avg / (winners avg + others avg) x 100. 50 = no difference. Above 60 = the winners score clearly higher than the others.');
     out.push('Draw: a draw has a SMALL difference, so a lift below 50 is the good sign there.');
+    out.push('Over 1.5 = 2+ goals, Over 2.5 = 3+ goals, Over 3.5 = 4+ goals.');
     out.push('Averages of matches that already finished. No accuracy is promised.');
     return { ok: true, messages: [out.join('\n')] };
   } catch (e) {

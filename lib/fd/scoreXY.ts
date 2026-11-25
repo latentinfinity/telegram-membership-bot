@@ -1,27 +1,16 @@
 // lib/fd/scoreXY.ts - Correct score X:Y. Read only. Private chat only.
-// X = 2*hs*ac/(hs+ac) (Home), Y = 2*as*hc/(as+hc) (Away). A zero denominator gives 0.
-// Rounding: decimal part 0.65 or more rounds up, below 0.65 rounds down
-// (1.67 -> 2, 2.6 -> 2, 2.65 -> 3). Exact integer maths on hundredths.
+// X and Y come from Score 2 (see lib/fd/ranking.ts):
+//   X = (min(hs,ac) / (1 + max(hs,ac))) * hs      home part of Score 2 * home average scored
+//   Y = (min(as,hc) / (1 + max(as,hc))) * as      away part of Score 2 * away average scored
+// Each is rounded half up (0.5 goes up). Exact integer maths on hundredths.
 // Pasted matches whose league starts with "Basketball" are shown as basketball.
 import { createAdminClient } from '@/lib/supabase/admin';
+import { score2Xy } from '@/lib/fd/ranking';
 
 const LIMIT = 3500;
 
 function h2(n: number): number {
   return Math.round(Number(n.toFixed(2)) * 100);
-}
-
-// a, b in hundredths. Returns the rounded goals.
-function roundSide(a: number, b: number): number {
-  const d = BigInt(a) + BigInt(b);
-  if (d === BigInt(0)) return 0;
-  const n = BigInt(2) * BigInt(a) * BigInt(b);
-  return Number((n + BigInt(35) * d) / (BigInt(100) * d));
-}
-
-function rawSide(a: number, b: number): number {
-  const d = a + b;
-  return d === 0 ? 0 : (2 * a * b) / d / 100;
 }
 
 function pack(header: string, entries: string[]): string[] {
@@ -40,15 +29,10 @@ function pack(header: string, entries: string[]): string[] {
 }
 
 function line(num: number, name: string, hs: number, hc: number, as: number, ac: number): string {
-  const hsH = h2(hs);
-  const hcH = h2(hc);
-  const asH = h2(as);
-  const acH = h2(ac);
-  const x = roundSide(hsH, acH);
-  const y = roundSide(asH, hcH);
+  const xy = score2Xy(h2(hs), h2(hc), h2(as), h2(ac));
   return (
-    num + ') ' + name + '   ' + x + ' : ' + y +
-    '\n(' + rawSide(hsH, acH).toFixed(2) + ' : ' + rawSide(asH, hcH).toFixed(2) + ')'
+    num + ') ' + name + '   ' + xy.x + ' : ' + xy.y +
+    '\n(' + xy.rawX.toFixed(2) + ' : ' + xy.rawY.toFixed(2) + ')'
   );
 }
 
@@ -62,6 +46,8 @@ function kickoff(iso: string): string {
     timeZone: 'Africa/Lagos',
   });
 }
+
+const FOOT_NOTE = 'X:Y = Home:Away, from Score 2, rounded half up. Rule-based, no accuracy is promised.';
 
 // ── Football-data competitions ────────────────────────────────────────────
 type FxRow = {
@@ -118,8 +104,7 @@ export async function scoresCompetition(
       return { ok: true, messages: [header + '\n\nNo stored match has averages yet.' + (notShown.length ? '\n\nNOT SHOWN:\n' + notShown.join('\n') : '')] };
     }
     const messages = pack(header, entries);
-    const foot = 'X:Y = Home:Away, rounded up from 0.65. Rule-based, no accuracy is promised.' +
-      (notShown.length ? '\n\nNOT SHOWN:\n' + notShown.join('\n') : '');
+    const foot = FOOT_NOTE + (notShown.length ? '\n\nNOT SHOWN:\n' + notShown.join('\n') : '');
     messages[messages.length - 1] += '\n' + foot;
     return { ok: true, messages };
   } catch (e) {
@@ -172,8 +157,7 @@ function group(rows: ScoreRow[], title: string): string[] {
   }
   const messages = pack(header, entries);
   messages[messages.length - 1] +=
-    '\nX:Y = Home:Away, rounded up from 0.65. Rule-based, no accuracy is promised.' +
-    (unreadable.length ? '\nCould not read: ' + unreadable.join(', ') : '');
+    '\n' + FOOT_NOTE + (unreadable.length ? '\nCould not read: ' + unreadable.join(', ') : '');
   return messages;
 }
 
