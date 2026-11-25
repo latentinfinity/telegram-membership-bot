@@ -28,6 +28,10 @@
 //           total, basketball = Score - 10 floored.
 //   List 2: value 2 = rate * Score 2, top 10, descending. Bracket: f.
 //           A match that is also in list 1 gets a check mark.
+// FOOTBALL h LIST (after the last top 10 list): matches with f 3.00 or more.
+//   g = smaller conceded / bigger conceded (home conceded vs away conceded; both 0 = no g, left out).
+//   h = f * g, rounded to 2 decimals. Matches with h below 3.00 are left out.
+//   Ranked by h, lowest first (ascending). The number in brackets is h.
 // BASKETBALL (pasted matches only): the word Basketball on the first line of the paste marks
 //   every match in it as basketball (the stored league starts with "Basketball"). Basketball
 //   gets the same WIN ranking and RX 2+ (with the D2 tick and the X:Y star), NO Draw, and its Over lists.
@@ -131,6 +135,8 @@ type OverItem = {
   name: string;
   tHundredths: number; // t = hs + as in hundredths, exact
   concedeH: number; // home conceded + away conceded in hundredths, exact
+  hcH: number; // home conceded in hundredths
+  acH: number; // away conceded in hundredths
   score: number;
   score2: number;
   fH: number; // f = Score 2 * total scored, in hundredths
@@ -353,8 +359,44 @@ function topLists(
   return out.concat(pack(header2, entries2, skipNote));
 }
 
+// The football h LIST, after the last top 10 list.
+//   Matches with f 3.00 or more. g = smaller conceded / bigger conceded (home vs away).
+//   h = f * g rounded to 2 decimals. h below 3.00 is left out. Lowest h first.
+function hListMessages(title: string, items: OverItem[]): string[] {
+  const f3 = items.filter((m) => m.fH >= 300);
+  const rows: { m: OverItem; g: number; hH: number }[] = [];
+  let noG = 0;
+  f3.forEach((m) => {
+    const big = Math.max(m.hcH, m.acH);
+    const small = Math.min(m.hcH, m.acH);
+    if (big <= 0) {
+      noG++;
+      return;
+    }
+    // h in hundredths = f (hundredths) * small / big, rounded half up. Exact integers.
+    const hH = Math.floor((2 * m.fH * small + big) / (2 * big));
+    rows.push({ m, g: small / big, hH });
+  });
+  const kept = rows.filter((x) => x.hH >= 300).sort((a, b) => a.hH - b.hH || a.m.order - b.m.order);
+  const left = f3.length - kept.length;
+  const footer =
+    'Matches with f 3.00 or more: ' + f3.length + '. Left out: ' + left +
+    ' (h below 3.00' + (noG > 0 ? ', or no g because both conceded averages are 0' : '') + ').\n' +
+    'h = f x g, g = smaller conceded / bigger conceded. Lowest h first.';
+  const header = 'OVER h LIST (f 3+, h 3+) - ' + title + ' (' + kept.length + ')';
+  if (kept.length === 0) return [header + '\nNone\n\n' + footer];
+  const entries = kept.map(
+    (x, i) =>
+      i + 1 + ') ' + x.m.name + ' (' + (x.hH / 100).toFixed(2) + ')' +
+      '\nf ' + (x.m.fH / 100).toFixed(2) + ' x g ' + x.g.toFixed(3) + ' = h ' + (x.hH / 100).toFixed(2) +
+      (x.m.extra ? '\n' + x.m.extra : '')
+  );
+  return pack(header, entries, footer);
+}
+
 // The football OVER RANKING: ranked by f (Score 2 x total scored), highest first.
-// Matches with f below 2.00 are removed. The number in brackets is f. Then the two top 10 lists.
+// Matches with f below 2.00 are removed. The number in brackets is f.
+// Then the two top 10 lists, then the h list.
 function overMessages(title: string, items: OverItem[]): string[] {
   if (items.length === 0) return ['OVER RANKING (f, highest first) - ' + title + ' (0)\nNone'];
 
@@ -376,7 +418,7 @@ function overMessages(title: string, items: OverItem[]): string[] {
     );
     first = pack(header, entries, footer);
   }
-  return first.concat(topLists(title, items, bracketOf, ''));
+  return first.concat(topLists(title, items, bracketOf, '')).concat(hListMessages(title, items));
 }
 
 // The basketball OVER RANKING: one single list, highest Score first, then the two top 10 lists.
@@ -529,6 +571,8 @@ export async function rankCompetition(
         name: r.home_name + ' - ' + r.away_name,
         tHundredths: hsH + asH,
         concedeH: hcH + acH,
+        hcH,
+        acH,
         score: overScore(hs, hc, as, ac),
         score2: overScore2(hs, hc, as, ac),
         fH: fHundredths(hs, hc, as, ac),
@@ -644,6 +688,8 @@ function rankPastedGroup(rows: PastedRow[], basketball: boolean): string[] {
       name: r.name,
       tHundredths: hsH + asH,
       concedeH: hcH + acH,
+      hcH,
+      acH,
       score: overScore(hs, hc, as, ac),
       score2: overScore2(hs, hc, as, ac),
       fH: fHundredths(hs, hc, as, ac),
