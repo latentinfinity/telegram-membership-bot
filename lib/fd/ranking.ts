@@ -22,15 +22,17 @@
 //   BASKETBALL main list: every match, highest Score first. Bracket number: Score - 10, floored.
 // TOP 10 LISTS (football AND basketball, same rules):
 //   rate = bigger / smaller of (total scored, total conceded). Matches with a zero total have no rate.
-//   List 1: value = rate * Score, top 10, descending.
+//   List 1: value = rate * Score, top 10, descending. Bracket: as in the main list.
 //   List 2: Score 2 = min(hs,ac)/(1+max(hs,ac)) + min(as,hc)/(1+max(as,hc)),
 //           value 2 = rate * Score 2, top 10, descending.
+//           Bracket: Score 2 * total scored, to 2 decimals.
 //           A match that is also in list 1 gets a check mark.
 // BASKETBALL (pasted matches only): the word Basketball on the first line of the paste marks
 //   every match in it as basketball (the stored league starts with "Basketball"). Basketball
 //   gets the same WIN ranking and RX 2+ (with the D2 tick), NO Draw, and its own Over lists.
 // Part 1: one competition's stored pending matches (fd_fixtures). Football only.
 // Part 2: the matches pasted into the storage (one list across all leagues).
+// isDraw, rxQualifies, overRate and the score functions are exported for lib/fd/track.ts.
 import { createAdminClient } from '@/lib/supabase/admin';
 
 const LIMIT = 3500;
@@ -246,6 +248,7 @@ function bracketBasket(m: OverItem): number {
 // The two TOP 10 lists, shared by football and basketball.
 //   rate = bigger / smaller of (total scored, total conceded).
 //   List 1: rate * Score. List 2: rate * Score 2 (check mark when the match is also in list 1).
+//   List 2 bracket: Score 2 * total scored, to 2 decimals.
 function topLists(
   title: string,
   items: OverItem[],
@@ -291,7 +294,8 @@ function topLists(
   if (listB.length === 0) return out.concat([header2 + '\nNone']);
   const entries2 = listB.map(
     (x, i) =>
-      i + 1 + ') ' + x.m.name + (inA[x.m.order] ? ' ✅' : '') + ' (' + bracket(x.m) + ')' +
+      i + 1 + ') ' + x.m.name + (inA[x.m.order] ? ' ✅' : '') +
+      ' (' + ((x.m.score2 * x.m.tHundredths) / 100).toFixed(2) + ')' +
       '\nrate ' + x.rate.toFixed(3) + ' x Score 2 ' + x.m.score2.toFixed(3) +
       ' = ' + x.value2.toFixed(3) + (x.m.extra ? '\n' + x.m.extra : '')
   );
