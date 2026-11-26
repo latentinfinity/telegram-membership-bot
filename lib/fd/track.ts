@@ -10,8 +10,20 @@
 //   f BANDS: f = Score 2 x total scored (2 decimals). Band 3+ = 3.00 to 3.99, 4+ = 4.00 to 4.99,
 //   5+ = 5.00 and above. Reports how often each band produced Over 1.5 (2+ goals),
 //   Over 2.5 (3+ goals) and Over 3.5 (4+ goals).
+//   h LIST: matches that made the football h list (f 3.00 or more and h 3.00 or more, h = f x g).
+//   Reports how often they produced Over 2.5 (3+ goals) and Over 3.5 (4+ goals).
 import { createAdminClient } from '@/lib/supabase/admin';
-import { homePoint, awayPoint, overScore, overScore2, overRate, rxQualifies, isDraw, fHundredths } from '@/lib/fd/ranking';
+import {
+  homePoint,
+  awayPoint,
+  overScore,
+  overScore2,
+  overRate,
+  rxQualifies,
+  isDraw,
+  fHundredths,
+  hHundredths,
+} from '@/lib/fd/ranking';
 
 const PAGE = 1000;
 const MAX_PAGES = 40;
@@ -231,6 +243,7 @@ export async function trackMessages(
     const f3 = newBand();
     const f4 = newBand();
     const f5 = newBand();
+    const hBand = newBand();
     let matches = 0;
     let overCount = 0;
     let drawMatches = 0;
@@ -294,6 +307,16 @@ export async function trackMessages(
         if (goals >= 3) f3.o25++;
         if (goals >= 2) f3.o15++;
       }
+
+      // h list: f 3.00 or more and h 3.00 or more (the matches that made the football h list).
+      if (fH >= 300) {
+        const hH = hHundredths(fH, hcH, acH);
+        if (hH !== null && hH >= 300) {
+          hBand.n++;
+          if (goals >= 3) hBand.o25++;
+          if (goals >= 4) hBand.o35++;
+        }
+      }
     });
 
     if (matches === 0) {
@@ -333,6 +356,11 @@ export async function trackMessages(
     out.push('  Over 2.5: ' + fpct(f4.o25, f4.n));
     out.push('f 5+ (5.00 and above): ' + f5.n + ' matches');
     out.push('  Over 3.5: ' + fpct(f5.o35, f5.n));
+    out.push('');
+    out.push('h LIST (matches that made the h list: f 3.00+ and h 3.00+, h = f x g)');
+    out.push('Matches: ' + hBand.n);
+    out.push('  Over 2.5: ' + fpct(hBand.o25, hBand.n));
+    out.push('  Over 3.5: ' + fpct(hBand.o35, hBand.n));
     out.push('');
     out.push('Lift = winners avg / (winners avg + others avg) x 100. 50 = no difference. Above 60 = the winners score clearly higher than the others.');
     out.push('Draw: a draw has a SMALL difference, so a lift below 50 is the good sign there.');
