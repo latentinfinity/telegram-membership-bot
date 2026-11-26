@@ -257,6 +257,7 @@ export async function trackMessages(
     const hBand = newBand();
     const starSides = newWin();
     const noStarSides = newWin();
+    const zeroZero = newWin();
     let matches = 0;
     let overCount = 0;
     let drawMatches = 0;
@@ -292,6 +293,10 @@ export async function trackMessages(
         if (q.home) addWin(xy.x > xy.y ? starSides : noStarSides, homeWon);
         if (q.away) addWin(xy.y > xy.x ? starSides : noStarSides, awayWon);
       }
+
+      // Correct score 0:0: both X:Y numbers are 0. Hit = the match ended level.
+      const xy00 = score2Xy(hsH, hcH, asH, acH);
+      if (xy00.x === 0 && xy00.y === 0) addWin(zeroZero, rh === ra);
 
       if (isDraw(hsH, hcH, asH, acH)) {
         drawMatches++;
@@ -361,6 +366,9 @@ export async function trackMessages(
     out.push('DRAW');
     out.push('Draw list matches: ' + drawMatches + ', ended level ' + drawHits + ' (' + (drawMatches > 0 ? Math.round((drawHits * 100) / drawMatches) + '%' : '-') + ')');
     out.push(line('Difference', drawAcc, 'draws', 'others'));
+    out.push('');
+    out.push('CORRECT SCORE 0:0 (X:Y both 0)');
+    out.push('Matches: ' + zeroZero.n + ', ended level ' + fpct(zeroZero.won, zeroZero.n));
     out.push('');
     out.push('OVER 2.5 (3 or more goals)');
     out.push('Matches: ' + matches + ', went over ' + overCount + ' (' + Math.round((overCount * 100) / matches) + '%)');
