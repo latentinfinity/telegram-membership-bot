@@ -14,6 +14,10 @@
 //   is bigger than its opponent's. A tie gets no star.
 //   A side gets a heart from the HEART FORMULA (below) when its rate is 1.5 or more.
 //   The rate is shown in brackets next to the heart.
+//   TRUST (T): every RX 2+ side that has a heart rate (even below 1.5) shows its rate in
+//   brackets and T after it. a = rx, b = heart rate, a >= 0, b >= 0, a + b > 0:
+//   D = |a - b| / (a + b), V = 2*a*b / (a + b), T = 100 * (V / (1 + V)) * (1 - D).
+//   A side with no heart result (a zero average) shows no T.
 // HEART FORMULA (one single formula, exact integer maths, averages in hundredths):
 //   Home = 1/((27/40)*hc) + (9/40)*ac + 1/((3/40)*as) + (1/40)*hs
 //   Away = 1/((27/40)*ac) + (9/40)*hc + 1/((3/40)*hs) + (1/40)*as
@@ -123,6 +127,17 @@ export function heartRates(
   };
 }
 
+// TRUST. a = rx, b = heart rate, a >= 0, b >= 0, a + b > 0.
+//   D = |a - b| / (a + b),  V = 2*a*b / (a + b),  T = 100 * (V / (1 + V)) * (1 - D).
+// null when a or b is not usable.
+export function trustT(a: number, b: number): number | null {
+  if (!isFinite(a) || !isFinite(b) || a < 0 || b < 0 || a + b <= 0) return null;
+  const d = Math.abs(a - b) / (a + b);
+  const v = (2 * a * b) / (a + b);
+  const t = 100 * (v / (1 + v)) * (1 - d);
+  return isFinite(t) ? t : null;
+}
+
 // Rounds num/den half up (0.5 goes up), exact. num >= 0, den > 0.
 function roundHalfUp(num: bigint, den: bigint): number {
   const two = BigInt(2);
@@ -173,7 +188,7 @@ type RxItem = {
   tick: boolean;
   star: boolean;
   heart: boolean;
-  heartRate: number; // the heart rate, shown in brackets next to the heart
+  heartRate: number | null; // the heart rate (null = no heart result), shown in brackets with T
   line: string;
   extra: string;
   order: number;
@@ -321,18 +336,27 @@ function rankedEntries(sides: Side[]): string[] {
 
 // The RX 2+ section: one descending list, highest rx first.
 // Check mark when D2 >= 3. Star when the side's X:Y number is bigger than its opponent's.
-// Heart when the heart formula rate is 1.5 or more (the rate is shown in brackets).
+// Heart when the heart formula rate is 1.5 or more. Every side with a heart rate shows the rate
+// in brackets and T (trust, from rx and the heart rate). No heart result = no brackets, no T.
 function rxMessages(title: string, items: RxItem[]): string[] {
   const header = 'RX 2+ - ' + title + ' (' + items.length + ')';
   if (items.length === 0) return [header + '\nNone'];
   const sorted = items.slice().sort((a, b) => b.rx - a.rx || a.order - b.order);
-  const entries = sorted.map(
-    (x, i) =>
-      i + 1 + ') ' + x.team + (x.tick ? ' ✅' : '') + (x.star ? ' ⭐' : '') +
-      (x.heart ? ' ❤️ (' + x.heartRate.toFixed(3) + ')' : '') +
+  const entries = sorted.map((x, i) => {
+    let heartPart = '';
+    if (x.heartRate !== null) {
+      const t = trustT(x.rx, x.heartRate);
+      heartPart =
+        (x.heart ? ' ❤️' : '') +
+        ' (' + x.heartRate.toFixed(3) + ')' +
+        (t !== null ? ' T ' + t.toFixed(1) : '');
+    }
+    return (
+      i + 1 + ') ' + x.team + (x.tick ? ' ✅' : '') + (x.star ? ' ⭐' : '') + heartPart +
       '   rx ' + x.rx.toFixed(3) +
       '\n' + x.line + (x.extra ? '\n' + x.extra : '')
-  );
+    );
+  });
   return pack(header, entries, '');
 }
 
@@ -642,10 +666,10 @@ export async function rankCompetition(
       const xy = score2Xy(hsH, hcH, asH, acH);
       const hr = heartRates(hsH, hcH, asH, acH);
       if (q.home) {
-        rxItems.push({ team: r.home_name, rx: hp / ap, tick: rxTick, star: xy.x > xy.y, heart: hr !== null && hr.home, heartRate: hr !== null ? hr.rateHome : 0, line: 'Home vs ' + r.away_name, extra: when, order: i * 2 });
+        rxItems.push({ team: r.home_name, rx: hp / ap, tick: rxTick, star: xy.x > xy.y, heart: hr !== null && hr.home, heartRate: hr !== null ? hr.rateHome : null, line: 'Home vs ' + r.away_name, extra: when, order: i * 2 });
       }
       if (q.away) {
-        rxItems.push({ team: r.away_name, rx: ap / hp, tick: rxTick, star: xy.y > xy.x, heart: hr !== null && hr.away, heartRate: hr !== null ? hr.rateAway : 0, line: 'Away at ' + r.home_name, extra: when, order: i * 2 + 1 });
+        rxItems.push({ team: r.away_name, rx: ap / hp, tick: rxTick, star: xy.y > xy.x, heart: hr !== null && hr.away, heartRate: hr !== null ? hr.rateAway : null, line: 'Away at ' + r.home_name, extra: when, order: i * 2 + 1 });
       }
       if (isDraw(hsH, hcH, asH, acH)) {
         const info = drawInfo(hsH, hcH, asH, acH);
@@ -760,10 +784,10 @@ function rankPastedGroup(rows: PastedRow[], basketball: boolean): string[] {
     const xy = score2Xy(hsH, hcH, asH, acH);
     const hr = heartRates(hsH, hcH, asH, acH);
     if (q.home) {
-      rxItems.push({ team: homeName, rx: hp / ap, tick: rxTick, star: xy.x > xy.y, heart: hr !== null && hr.home, heartRate: hr !== null ? hr.rateHome : 0, line: 'Home vs ' + awayName, extra: league, order: i * 2 });
+      rxItems.push({ team: homeName, rx: hp / ap, tick: rxTick, star: xy.x > xy.y, heart: hr !== null && hr.home, heartRate: hr !== null ? hr.rateHome : null, line: 'Home vs ' + awayName, extra: league, order: i * 2 });
     }
     if (q.away) {
-      rxItems.push({ team: awayName, rx: ap / hp, tick: rxTick, star: xy.y > xy.x, heart: hr !== null && hr.away, heartRate: hr !== null ? hr.rateAway : 0, line: 'Away at ' + homeName, extra: league, order: i * 2 + 1 });
+      rxItems.push({ team: awayName, rx: ap / hp, tick: rxTick, star: xy.y > xy.x, heart: hr !== null && hr.away, heartRate: hr !== null ? hr.rateAway : null, line: 'Away at ' + homeName, extra: league, order: i * 2 + 1 });
     }
     if (!basketball && isDraw(hsH, hcH, asH, acH)) {
       const info = drawInfo(hsH, hcH, asH, acH);
