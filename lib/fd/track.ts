@@ -9,7 +9,7 @@
 //   how often sides with BOTH star and heart won, and sides without a heart for comparison.
 //   TRUST: tracked on its own, not decided by the star or the heart. Every RX 2+ side that has a
 //   heart rate gets T (trustT from rx and the heart rate). Reports how often the sides with
-//   T of 50 or more won.
+//   T of 60 or more (60 included) won.
 //   DRAW: matches in the Draw list, difference |Home point - Away point|; hit = ended level.
 //   OVER: Score, Score 2, Value 1, Value 2 (rate x score); hit = 3 or more goals.
 //   LIFT = Main / (Main + Others) x 100, where Main = average of the ones that came true and
@@ -310,7 +310,7 @@ export async function trackMessages(
           if (star && heart) addWin(starHeartSides, homeWon);
           if (hr !== null) {
             const t = trustT(hp / ap, hr.rateHome);
-            if (t !== null && t >= 50) addWin(trustSides, homeWon);
+            if (t !== null && t >= 60) addWin(trustSides, homeWon);
           }
         }
         if (q.away) {
@@ -321,7 +321,7 @@ export async function trackMessages(
           if (star && heart) addWin(starHeartSides, awayWon);
           if (hr !== null) {
             const t = trustT(ap / hp, hr.rateAway);
-            if (t !== null && t >= 50) addWin(trustSides, awayWon);
+            if (t !== null && t >= 60) addWin(trustSides, awayWon);
           }
         }
       }
@@ -395,7 +395,7 @@ export async function trackMessages(
     out.push('RX 2+ without ❤️: ' + noHeartSides.n + ' sides, won ' + fpct(noHeartSides.won, noHeartSides.n));
     out.push('');
     out.push('TRUST (T, on its own: any RX 2+ side with a heart rate, with or without ⭐ or ❤️)');
-    out.push('RX 2+ with T 50+: ' + trustSides.n + ' sides, won ' + fpct(trustSides.won, trustSides.n));
+    out.push('RX 2+ with T 60+: ' + trustSides.n + ' sides, won ' + fpct(trustSides.won, trustSides.n));
     out.push('');
     out.push('DRAW');
     out.push('Draw list matches: ' + drawMatches + ', ended level ' + drawHits + ' (' + (drawMatches > 0 ? Math.round((drawHits * 100) / drawMatches) + '%' : '-') + ')');
