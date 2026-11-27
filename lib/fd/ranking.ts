@@ -30,20 +30,20 @@
 // SCORE 2 = min(hs,ac)/(1+max(hs,ac)) + min(as,hc)/(1+max(as,hc)). Its home part and away part
 //   give X:Y: X = home part * hs, Y = away part * as, each rounded half up (0.5 up).
 // f = Score 2 * total scored (t = hs + as), rounded to 2 decimals.
+// NEW SCORE = Home + Away, Home = (1/4)*max(hs,ac) + (3/4)*min(hs,ac),
+//   Away = (1/4)*max(as,hc) + (3/4)*min(as,hc).
+// P = 100 * sqrt(A*B) / (1 + sqrt(A*B)), A = f (2 decimals), B = NEW SCORE.
 // h = f * g, g = smaller conceded / bigger conceded (home conceded vs away conceded; both 0 = no g),
 //   h rounded to 2 decimals (hHundredths).
 // FOOTBALL OVER RANKING (main list): every match with f of 2.00 or more, ranked by f, highest first.
-//   The number in brackets is f. Matches with f below 2.00 are removed.
+//   The brackets are (f)(P), P with 1 decimal. Matches with f below 2.00 are removed.
+//   A match gets a star when: f from 3.00 to 3.99 and P 80 or more, or f from 4.00 to 4.99 and
+//   P 80 or more, or f 5.00 or more and P 83 or more (83 included). One star at most.
 // BASKETBALL main list: every match, highest Score (X + Y) first. Bracket number: Score - 10, floored.
-// TOP 10 LISTS (football AND basketball, same rules):
-//   rate = bigger / smaller of (total scored, total conceded). Matches with a zero total have no rate.
-//   List 1: value = rate * Score, top 10, descending. Bracket: football = whole part of the smaller
-//           total, basketball = Score - 10 floored.
-//   List 2: value 2 = rate * Score 2, top 10, descending. Bracket: f.
-//           A match that is also in list 1 gets a check mark.
-// FOOTBALL h LIST (after the last top 10 list): matches with f 3.00 or more and h 3.00 or more.
+// There are no top 10 lists any more.
+// FOOTBALL h LIST (after the main list): matches with f 3.00 or more and h 3.00 or more.
 //   Ranked by h, highest first (descending). The number in brackets is h.
-// BASKETBALL h LIST (after the basketball top 10 lists): ALL matches (no 3+ cut), ranked by h,
+// BASKETBALL h LIST (after the basketball main list): ALL matches (no 3+ cut), ranked by h,
 //   highest first. A match with both conceded averages 0 has no g and is left out.
 // BASKETBALL (pasted matches only): the word Basketball on the first line of the paste marks
 //   every match in it as basketball (the stored league starts with "Basketball"). Basketball
@@ -90,6 +90,31 @@ export function hHundredths(fH: number, hcH: number, acH: number): number | null
   const small = Math.min(hcH, acH);
   if (big <= 0) return null;
   return Math.floor((2 * fH * small + big) / (2 * big));
+}
+
+// NEW SCORE for P: Home + Away, each = (1/4)*max + (3/4)*min.
+export function newScore(hs: number, hc: number, as: number, ac: number): number {
+  const home = 0.25 * Math.max(hs, ac) + 0.75 * Math.min(hs, ac);
+  const away = 0.25 * Math.max(as, hc) + 0.75 * Math.min(as, hc);
+  return home + away;
+}
+
+// P = 100 * sqrt(A*B) / (1 + sqrt(A*B)). null when A*B is not usable.
+export function pValue(a: number, b: number): number | null {
+  const ab = a * b;
+  if (!isFinite(ab) || ab < 0) return null;
+  const s = Math.sqrt(ab);
+  const p = (100 * s) / (1 + s);
+  return isFinite(p) ? p : null;
+}
+
+// Star for the football main list. fH = f in hundredths.
+//   f 3.00 to 4.99 and P 80+, or f 5.00+ and P 83+ (both included).
+function overStar(fH: number, p: number | null): boolean {
+  if (p === null) return false;
+  if (fH >= 300 && fH <= 499) return p >= 80;
+  if (fH >= 500) return p >= 83;
+  return false;
 }
 
 // HEART FORMULA. Averages in hundredths, exact integer maths.
@@ -173,8 +198,8 @@ export function score2Xy(
   };
 }
 
-// Rate used by the two top 10 lists and by Tracking: bigger / smaller of
-// (total scored, total conceded), both in hundredths. null when the smaller one is 0.
+// Rate: bigger / smaller of (total scored, total conceded), both in hundredths.
+// null when the smaller one is 0. (Used by Tracking.)
 export function overRate(concedeH: number, tHundredths: number): number | null {
   const big = Math.max(concedeH, tHundredths);
   const small = Math.min(concedeH, tHundredths);
@@ -213,6 +238,7 @@ type OverItem = {
   score: number;
   score2: number;
   fH: number; // f = Score 2 * total scored, in hundredths
+  p: number | null; // P from f and the new score (null = not usable)
   extra: string;
   order: number;
 };
@@ -374,76 +400,13 @@ function drawMessages(title: string, draws: DrawEntry[]): string[] {
   return pack(header, entries, '');
 }
 
-// Football bracket number (top 10 list 1): the smaller of (total conceded, total scored),
-// minus 0.5, rounded half up = whole part of that smaller total. Values are in hundredths.
-function bracketOf(m: OverItem): number {
-  return Math.floor(Math.min(m.concedeH, m.tHundredths) / 100);
-}
-
 // Basketball bracket number: Score - 10, floored. The tiny 1e-9 stops a Score that is
 // exactly on a whole number from dropping a point through floating-point error.
 function bracketBasket(m: OverItem): number {
   return Math.floor(m.score - 10 + 1e-9);
 }
 
-// The two TOP 10 lists, shared by football and basketball.
-//   rate = bigger / smaller of (total scored, total conceded).
-//   List 1: rate * Score. List 2: rate * Score 2 (check mark when the match is also in list 1).
-//   List 2 bracket: f (Score 2 * total scored, 2 decimals).
-function topLists(
-  title: string,
-  items: OverItem[],
-  bracket: (m: OverItem) => number,
-  prefix: string
-): string[] {
-  const rated: { m: OverItem; rate: number; value: number; value2: number }[] = [];
-  let skipped = 0;
-  items.forEach((m) => {
-    const rate = overRate(m.concedeH, m.tHundredths);
-    if (rate === null) {
-      skipped++;
-      return;
-    }
-    rated.push({ m, rate, value: rate * m.score, value2: rate * m.score2 });
-  });
-  const skipNote =
-    skipped > 0 ? skipped + ' match(es) left out: total scored or total conceded is 0, so no rate.' : '';
-
-  // List 1: rate x Score, top 10.
-  const listA = rated.slice().sort((a, b) => b.value - a.value || a.m.order - b.m.order).slice(0, 10);
-  const inA: Record<number, boolean> = {};
-  listA.forEach((x) => {
-    inA[x.m.order] = true;
-  });
-  const header1 = prefix + 'OVER RATE x SCORE (top 10) - ' + title + ' (' + listA.length + ')';
-  let out: string[] = [];
-  if (listA.length === 0) {
-    out = out.concat([header1 + '\nNone']);
-  } else {
-    const entries1 = listA.map(
-      (x, i) =>
-        i + 1 + ') ' + x.m.name + ' (' + bracket(x.m) + ')' +
-        '\nrate ' + x.rate.toFixed(3) + ' x Score ' + x.m.score.toFixed(3) +
-        ' = ' + x.value.toFixed(3) + (x.m.extra ? '\n' + x.m.extra : '')
-    );
-    out = out.concat(pack(header1, entries1, skipNote));
-  }
-
-  // List 2: rate x Score 2, top 10. Check mark when the match is also in list 1.
-  const listB = rated.slice().sort((a, b) => b.value2 - a.value2 || a.m.order - b.m.order).slice(0, 10);
-  const header2 = prefix + 'OVER RATE x SCORE 2 (top 10) - ' + title + ' (' + listB.length + ')';
-  if (listB.length === 0) return out.concat([header2 + '\nNone']);
-  const entries2 = listB.map(
-    (x, i) =>
-      i + 1 + ') ' + x.m.name + (inA[x.m.order] ? ' ✅' : '') +
-      ' (' + (x.m.fH / 100).toFixed(2) + ')' +
-      '\nrate ' + x.rate.toFixed(3) + ' x Score 2 ' + x.m.score2.toFixed(3) +
-      ' = ' + x.value2.toFixed(3) + (x.m.extra ? '\n' + x.m.extra : '')
-  );
-  return out.concat(pack(header2, entries2, skipNote));
-}
-
-// The football h LIST, after the last top 10 list.
+// The football h LIST, after the main list.
 //   Matches with f 3.00 or more. h = f * g (g = smaller conceded / bigger conceded).
 //   h below 3.00 is left out. Highest h first (descending).
 function hListMessages(title: string, items: OverItem[]): string[] {
@@ -477,7 +440,7 @@ function hListMessages(title: string, items: OverItem[]): string[] {
   return pack(header, entries, footer);
 }
 
-// The basketball h LIST, after the basketball top 10 lists.
+// The basketball h LIST, after the basketball main list.
 //   ALL matches (no 3+ cut), h = f * g, highest h first. No g (both conceded 0) = left out.
 function hListBasketMessages(title: string, items: OverItem[]): string[] {
   const rows: { m: OverItem; g: number; hH: number }[] = [];
@@ -508,8 +471,8 @@ function hListBasketMessages(title: string, items: OverItem[]): string[] {
 }
 
 // The football OVER RANKING: ranked by f (Score 2 x total scored), highest first.
-// Matches with f below 2.00 are removed. The number in brackets is f.
-// Then the two top 10 lists, then the h list.
+// Matches with f below 2.00 are removed. The brackets are (f)(P), then a star by the star rule.
+// Then the h list.
 function overMessages(title: string, items: OverItem[]): string[] {
   if (items.length === 0) return ['OVER RANKING (f, highest first) - ' + title + ' (0)\nNone'];
 
@@ -526,16 +489,17 @@ function overMessages(title: string, items: OverItem[]): string[] {
     const entries = sorted.map(
       (m, i) =>
         i + 1 + ') ' + m.name + ' (' + (m.fH / 100).toFixed(2) + ')' +
+        (m.p !== null ? '(' + m.p.toFixed(1) + ')' : '') +
+        (overStar(m.fH, m.p) ? ' ⭐' : '') +
         '\nt ' + (m.tHundredths / 100).toFixed(2) +
         ' | Score 2 ' + m.score2.toFixed(3) + (m.extra ? '\n' + m.extra : '')
     );
     first = pack(header, entries, footer);
   }
-  return first.concat(topLists(title, items, bracketOf, '')).concat(hListMessages(title, items));
+  return first.concat(hListMessages(title, items));
 }
 
-// The basketball OVER RANKING: one single list, highest Score first, then the two top 10 lists,
-// then the h list.
+// The basketball OVER RANKING: one single list, highest Score first, then the h list.
 function overBasketballMessages(title: string, items: OverItem[]): string[] {
   const header = 'BASKETBALL OVER RANKING - ' + title + ' (' + items.length + ')';
   if (items.length === 0) return [header + '\nNone'];
@@ -545,9 +509,7 @@ function overBasketballMessages(title: string, items: OverItem[]): string[] {
       i + 1 + ') ' + m.name + ' (' + bracketBasket(m) + ')' +
       '\nScore ' + m.score.toFixed(3) + (m.extra ? '\n' + m.extra : '')
   );
-  return pack(header, entries, '')
-    .concat(topLists(title, items, bracketBasket, 'BASKETBALL '))
-    .concat(hListBasketMessages(title, items));
+  return pack(header, entries, '').concat(hListBasketMessages(title, items));
 }
 
 // Builds the draw tag and tick for one match (averages already in hundredths).
@@ -684,6 +646,7 @@ export async function rankCompetition(
           order: i,
         });
       }
+      const fH = fHundredths(hs, hc, as, ac);
       overs.push({
         name: r.home_name + ' - ' + r.away_name,
         tHundredths: hsH + asH,
@@ -692,7 +655,8 @@ export async function rankCompetition(
         acH,
         score: overScore(hs, hc, as, ac),
         score2: overScore2(hs, hc, as, ac),
-        fH: fHundredths(hs, hc, as, ac),
+        fH,
+        p: pValue(fH / 100, newScore(hs, hc, as, ac)),
         extra: when,
         order: i,
       });
@@ -802,6 +766,7 @@ function rankPastedGroup(rows: PastedRow[], basketball: boolean): string[] {
         order: i,
       });
     }
+    const fH = fHundredths(hs, hc, as, ac);
     overs.push({
       name: r.name,
       tHundredths: hsH + asH,
@@ -810,7 +775,8 @@ function rankPastedGroup(rows: PastedRow[], basketball: boolean): string[] {
       acH,
       score: overScore(hs, hc, as, ac),
       score2: overScore2(hs, hc, as, ac),
-      fH: fHundredths(hs, hc, as, ac),
+      fH,
+      p: pValue(fH / 100, newScore(hs, hc, as, ac)),
       extra: league,
       order: i,
     });
