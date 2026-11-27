@@ -15,8 +15,8 @@
 //   OVER: Score, Score 2, Value 1, Value 2 (rate x score); hit = 3 or more goals.
 //   OVER T: T from Score 2 (a) and g (b), trustT(a, b). g = smaller conceded / bigger conceded
 //   (home conceded vs away conceded; both 0 = no g, the match is left out). Tracked only.
-//   T 70+ -> how often Over 3.5 (4+ goals). T 60+ -> how often Over 2.5 (3+ goals).
-//   T 55+ -> how often Over 1.5 (2+ goals). Each threshold includes its own number.
+//   T 35+ -> how often Over 3.5 (4+ goals). T 30+ -> how often Over 2.5 (3+ goals).
+//   T 25+ -> how often Over 1.5 (2+ goals). Each threshold includes its own number.
 //   LIFT = Main / (Main + Others) x 100, where Main = average of the ones that came true and
 //   Others = average of the rest. 50 = no difference.
 //   f BANDS: f = Score 2 x total scored (2 decimals). Band 3+ = 3.00 to 3.99, 4+ = 4.00 to 4.99,
@@ -357,9 +357,9 @@ export async function trackMessages(
       const g = gBig > 0 ? gSmall / gBig : null;
       const overT = g !== null ? trustT(sc2, g) : null;
       if (overT !== null) {
-        if (overT >= 70) addWin(tOver35, goals >= 4);
-        if (overT >= 60) addWin(tOver25, goals >= 3);
-        if (overT >= 55) addWin(tOver15, goals >= 2);
+        if (overT >= 35) addWin(tOver35, goals >= 4);
+        if (overT >= 30) addWin(tOver25, goals >= 3);
+        if (overT >= 25) addWin(tOver15, goals >= 2);
       }
 
       // f bands: 5+ (5.00 and above), 4+ (4.00 to 4.99), 3+ (3.00 to 3.99).
@@ -440,15 +440,15 @@ export async function trackMessages(
     out.push('  Over 3.5: ' + fpct(hBand.o35, hBand.n));
     out.push('');
     out.push('OVER T (T from Score 2 and g, g = smaller conceded / bigger conceded)');
-    out.push('T 70+ : ' + tOver35.n + ' matches, Over 3.5 ' + fpct(tOver35.won, tOver35.n));
-    out.push('T 60+ : ' + tOver25.n + ' matches, Over 2.5 ' + fpct(tOver25.won, tOver25.n));
-    out.push('T 55+ : ' + tOver15.n + ' matches, Over 1.5 ' + fpct(tOver15.won, tOver15.n));
+    out.push('T 35+ : ' + tOver35.n + ' matches, Over 3.5 ' + fpct(tOver35.won, tOver35.n));
+    out.push('T 30+ : ' + tOver25.n + ' matches, Over 2.5 ' + fpct(tOver25.won, tOver25.n));
+    out.push('T 25+ : ' + tOver15.n + ' matches, Over 1.5 ' + fpct(tOver15.won, tOver15.n));
     out.push('');
     out.push('Lift = winners avg / (winners avg + others avg) x 100. 50 = no difference. Above 60 = the winners score clearly higher than the others.');
     out.push('Draw: a draw has a SMALL difference, so a lift below 50 is the good sign there.');
     out.push('⭐ = the side X:Y number was bigger than its opponent. ❤️ = T (trust) was 60 or more. A draw counts as not winning.');
     out.push('Over 1.5 = 2+ goals, Over 2.5 = 3+ goals, Over 3.5 = 4+ goals.');
-    out.push('OVER T groups overlap: a match with T 70+ is also counted in T 60+ and T 55+. Matches with no g are left out.');
+    out.push('OVER T groups overlap: a match with T 35+ is also counted in T 30+ and T 25+. Matches with no g are left out.');
     out.push('Averages of matches that already finished. No accuracy is promised.');
     return { ok: true, messages: [out.join('\n')] };
   } catch (e) {
