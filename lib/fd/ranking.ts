@@ -16,7 +16,7 @@
 //   The rate is shown in brackets next to the heart.
 //   TRUST (T): every RX 2+ side that has a heart rate (even below 1.5) shows its rate in
 //   brackets and T after it. a = rx, b = heart rate, a >= 0, b >= 0, a + b > 0:
-//   D = |a - b| / (a + b), V = 2*a*b / (a + b), T = 100 * (V / (1 + V)) * (1 - D).
+//   D = |a - b| / (a + b), T = 100 * D (0 to 100).
 //   A side with no heart result (a zero average) shows no T.
 // HEART FORMULA (one single formula, exact integer maths, averages in hundredths):
 //   Home = 1/((27/40)*hc) + (9/40)*ac + 1/((3/40)*as) + (1/40)*hs
@@ -128,13 +128,12 @@ export function heartRates(
 }
 
 // TRUST. a = rx, b = heart rate, a >= 0, b >= 0, a + b > 0.
-//   D = |a - b| / (a + b),  V = 2*a*b / (a + b),  T = 100 * (V / (1 + V)) * (1 - D).
+//   D = |a - b| / (a + b),  T = 100 * D (0 to 100).
 // null when a or b is not usable.
 export function trustT(a: number, b: number): number | null {
   if (!isFinite(a) || !isFinite(b) || a < 0 || b < 0 || a + b <= 0) return null;
   const d = Math.abs(a - b) / (a + b);
-  const v = (2 * a * b) / (a + b);
-  const t = 100 * (v / (1 + v)) * (1 - d);
+  const t = 100 * d;
   return isFinite(t) ? t : null;
 }
 
