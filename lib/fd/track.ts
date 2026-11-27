@@ -5,6 +5,8 @@
 //   WIN: every side's main point; won = that team scored more. RX 2+ sides: rx value.
 //   STAR: RX 2+ sides whose X:Y number (Score 2 x average scored, rounded half up) was bigger than
 //   the opponent's. Reports how often star sides won, against RX sides without a star.
+//   HEART: RX 2+ sides whose heart formula rate was 2 or more. Reports how often heart sides won,
+//   how often sides with BOTH star and heart won, and sides without a heart for comparison.
 //   DRAW: matches in the Draw list, difference |Home point - Away point|; hit = ended level.
 //   OVER: Score, Score 2, Value 1, Value 2 (rate x score); hit = 3 or more goals.
 //   LIFT = Main / (Main + Others) x 100, where Main = average of the ones that came true and
@@ -26,6 +28,7 @@ import {
   fHundredths,
   hHundredths,
   score2Xy,
+  heartRates,
 } from '@/lib/fd/ranking';
 
 const PAGE = 1000;
@@ -219,7 +222,7 @@ function fpct(hits: number, n: number): string {
   return n > 0 ? Math.round((hits * 100) / n) + '% (' + hits + ' of ' + n + ')' : '-';
 }
 
-// Win counter for RX sides with / without the star.
+// Win counter for RX sides (star, heart, both, none).
 type WinCount = { n: number; won: number };
 const newWin = (): WinCount => ({ n: 0, won: 0 });
 function addWin(w: WinCount, won: boolean) {
@@ -257,7 +260,9 @@ export async function trackMessages(
     const hBand = newBand();
     const starSides = newWin();
     const noStarSides = newWin();
-    const zeroZero = newWin();
+    const heartSides = newWin();
+    const noHeartSides = newWin();
+    const starHeartSides = newWin();
     let matches = 0;
     let overCount = 0;
     let drawMatches = 0;
@@ -287,16 +292,25 @@ export async function trackMessages(
       if (q.home) addTo(rxAcc, hp / ap, homeWon);
       if (q.away) addTo(rxAcc, ap / hp, awayWon);
 
-      // Star: an RX 2+ side whose X:Y number is bigger than its opponent's.
+      // Star and heart for RX 2+ sides.
       if (q.home || q.away) {
         const xy = score2Xy(hsH, hcH, asH, acH);
-        if (q.home) addWin(xy.x > xy.y ? starSides : noStarSides, homeWon);
-        if (q.away) addWin(xy.y > xy.x ? starSides : noStarSides, awayWon);
+        const hr = heartRates(hsH, hcH, asH, acH);
+        if (q.home) {
+          const star = xy.x > xy.y;
+          const heart = hr !== null && hr.home;
+          addWin(star ? starSides : noStarSides, homeWon);
+          addWin(heart ? heartSides : noHeartSides, homeWon);
+          if (star && heart) addWin(starHeartSides, homeWon);
+        }
+        if (q.away) {
+          const star = xy.y > xy.x;
+          const heart = hr !== null && hr.away;
+          addWin(star ? starSides : noStarSides, awayWon);
+          addWin(heart ? heartSides : noHeartSides, awayWon);
+          if (star && heart) addWin(starHeartSides, awayWon);
+        }
       }
-
-      // Correct score 0:0: both X:Y numbers are 0. Hit = the match ended level.
-      const xy00 = score2Xy(hsH, hcH, asH, acH);
-      if (xy00.x === 0 && xy00.y === 0) addWin(zeroZero, rh === ra);
 
       if (isDraw(hsH, hcH, asH, acH)) {
         drawMatches++;
@@ -362,13 +376,13 @@ export async function trackMessages(
     out.push(line('RX   ', rxAcc, 'winners', 'others'));
     out.push('RX 2+ with ⭐: ' + starSides.n + ' sides, won ' + fpct(starSides.won, starSides.n));
     out.push('RX 2+ without ⭐: ' + noStarSides.n + ' sides, won ' + fpct(noStarSides.won, noStarSides.n));
+    out.push('RX 2+ with ❤️: ' + heartSides.n + ' sides, won ' + fpct(heartSides.won, heartSides.n));
+    out.push('RX 2+ with ⭐ and ❤️: ' + starHeartSides.n + ' sides, won ' + fpct(starHeartSides.won, starHeartSides.n));
+    out.push('RX 2+ without ❤️: ' + noHeartSides.n + ' sides, won ' + fpct(noHeartSides.won, noHeartSides.n));
     out.push('');
     out.push('DRAW');
     out.push('Draw list matches: ' + drawMatches + ', ended level ' + drawHits + ' (' + (drawMatches > 0 ? Math.round((drawHits * 100) / drawMatches) + '%' : '-') + ')');
     out.push(line('Difference', drawAcc, 'draws', 'others'));
-    out.push('');
-    out.push('CORRECT SCORE 0:0 (X:Y both 0)');
-    out.push('Matches: ' + zeroZero.n + ', ended level ' + fpct(zeroZero.won, zeroZero.n));
     out.push('');
     out.push('OVER 2.5 (3 or more goals)');
     out.push('Matches: ' + matches + ', went over ' + overCount + ' (' + Math.round((overCount * 100) / matches) + '%)');
@@ -394,7 +408,7 @@ export async function trackMessages(
     out.push('');
     out.push('Lift = winners avg / (winners avg + others avg) x 100. 50 = no difference. Above 60 = the winners score clearly higher than the others.');
     out.push('Draw: a draw has a SMALL difference, so a lift below 50 is the good sign there.');
-    out.push('⭐ = the side X:Y number was bigger than its opponent. A draw counts as not winning.');
+    out.push('⭐ = the side X:Y number was bigger than its opponent. ❤️ = the heart formula rate was 2 or more. A draw counts as not winning.');
     out.push('Over 1.5 = 2+ goals, Over 2.5 = 3+ goals, Over 3.5 = 4+ goals.');
     out.push('Averages of matches that already finished. No accuracy is promised.');
     return { ok: true, messages: [out.join('\n')] };

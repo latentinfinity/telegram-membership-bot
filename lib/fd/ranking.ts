@@ -12,6 +12,12 @@
 //   A side gets a check mark when D2 >= 3 (3 included).
 //   A side gets a star when its own X:Y number (score 2 x average scored, rounded half up)
 //   is bigger than its opponent's. A tie gets no star.
+//   A side gets a heart from the HEART FORMULA (below) when its rate is 2 or more.
+// HEART FORMULA (one single formula, exact integer maths, averages in hundredths):
+//   Home = 1/((27/40)*hc) + (9/40)*ac + 1/((3/40)*as) + (1/40)*hs
+//   Away = 1/((27/40)*ac) + (9/40)*hc + 1/((3/40)*hs) + (1/40)*as
+//   The predicted side is the RX side. Home side: rate = Home / Away. Away side: rate = Away / Home.
+//   Rate 2 or more (2 included) = heart. If hs, hc, as or ac is 0 there is no result.
 // DRAW section (football only): a match qualifies when |Home point - Away point| (main D) is
 //   between 0.0 and 0.2, both ends included (exact integer maths). Closest first. A match gets
 //   a tick only when BOTH the main D and D2 are between 0 and 0.2 (included). Each match shows
@@ -36,11 +42,12 @@
 //   highest first. A match with both conceded averages 0 has no g and is left out.
 // BASKETBALL (pasted matches only): the word Basketball on the first line of the paste marks
 //   every match in it as basketball (the stored league starts with "Basketball"). Basketball
-//   gets the same WIN ranking and RX 2+ (with the D2 tick and the X:Y star), NO Draw, and its Over lists.
+//   gets the same WIN ranking and RX 2+ (with the D2 tick, the X:Y star and the heart), NO Draw,
+//   and its Over lists.
 // Part 1: one competition's stored pending matches (fd_fixtures). Football only.
 // Part 2: the matches pasted into the storage (one list across all leagues).
 // Exported for lib/fd/track.ts and lib/fd/scoreXY.ts: isDraw, rxQualifies, overRate, the score
-// functions, fHundredths, hHundredths and score2Xy.
+// functions, fHundredths, hHundredths, heartRates and score2Xy.
 import { createAdminClient } from '@/lib/supabase/admin';
 
 const LIMIT = 3500;
@@ -78,6 +85,39 @@ export function hHundredths(fH: number, hcH: number, acH: number): number | null
   const small = Math.min(hcH, acH);
   if (big <= 0) return null;
   return Math.floor((2 * fH * small + big) / (2 * big));
+}
+
+// HEART FORMULA. Averages in hundredths, exact integer maths.
+//   Home = 1/((27/40)*hc) + (9/40)*ac + 1/((3/40)*as) + (1/40)*hs
+//   Away = 1/((27/40)*ac) + (9/40)*hc + 1/((3/40)*hs) + (1/40)*as
+// With every average in hundredths the Home value is nh/dh and the Away value is na/da:
+//   nh = 48,000,000*as + 729*ac*hc*as + 432,000,000*hc + 81*hs*hc*as,  dh = 324,000*hc*as
+//   na = 48,000,000*hs + 729*hc*ac*hs + 432,000,000*ac + 81*as*ac*hs,  dh = 324,000*ac*hs
+// home = Home/Away is 2 or more (a Home side gets the heart). away = Away/Home is 2 or more.
+// null when hs, hc, as or ac is 0 (a denominator would be 0).
+export function heartRates(
+  hs: number,
+  hc: number,
+  as: number,
+  ac: number
+): { home: boolean; away: boolean; rateHome: number; rateAway: number } | null {
+  if (hs <= 0 || hc <= 0 || as <= 0 || ac <= 0) return null;
+  const B = (n: number) => BigInt(n);
+  const nh =
+    B(48000000) * B(as) + B(729) * B(ac) * B(hc) * B(as) + B(432000000) * B(hc) + B(81) * B(hs) * B(hc) * B(as);
+  const dh = B(324000) * B(hc) * B(as);
+  const na =
+    B(48000000) * B(hs) + B(729) * B(hc) * B(ac) * B(hs) + B(432000000) * B(ac) + B(81) * B(as) * B(ac) * B(hs);
+  const da = B(324000) * B(ac) * B(hs);
+  const homeTop = nh * da; // Home / Away = homeTop / awayTop
+  const awayTop = na * dh;
+  const two = B(2);
+  return {
+    home: homeTop >= two * awayTop,
+    away: awayTop >= two * homeTop,
+    rateHome: Number(homeTop) / Number(awayTop),
+    rateAway: Number(awayTop) / Number(homeTop),
+  };
 }
 
 // Rounds num/den half up (0.5 goes up), exact. num >= 0, den > 0.
@@ -129,6 +169,7 @@ type RxItem = {
   rx: number;
   tick: boolean;
   star: boolean;
+  heart: boolean;
   line: string;
   extra: string;
   order: number;
@@ -276,13 +317,15 @@ function rankedEntries(sides: Side[]): string[] {
 
 // The RX 2+ section: one descending list, highest rx first.
 // Check mark when D2 >= 3. Star when the side's X:Y number is bigger than its opponent's.
+// Heart when the heart formula rate is 2 or more.
 function rxMessages(title: string, items: RxItem[]): string[] {
   const header = 'RX 2+ - ' + title + ' (' + items.length + ')';
   if (items.length === 0) return [header + '\nNone'];
   const sorted = items.slice().sort((a, b) => b.rx - a.rx || a.order - b.order);
   const entries = sorted.map(
     (x, i) =>
-      i + 1 + ') ' + x.team + (x.tick ? ' ✅' : '') + (x.star ? ' ⭐' : '') + '   rx ' + x.rx.toFixed(3) +
+      i + 1 + ') ' + x.team + (x.tick ? ' ✅' : '') + (x.star ? ' ⭐' : '') + (x.heart ? ' ❤️' : '') +
+      '   rx ' + x.rx.toFixed(3) +
       '\n' + x.line + (x.extra ? '\n' + x.extra : '')
   );
   return pack(header, entries, '');
@@ -592,11 +635,12 @@ export async function rankCompetition(
       const sup = support(hsH, hcH, asH, acH);
       const rxTick = sup !== null && sup.big;
       const xy = score2Xy(hsH, hcH, asH, acH);
+      const hr = heartRates(hsH, hcH, asH, acH);
       if (q.home) {
-        rxItems.push({ team: r.home_name, rx: hp / ap, tick: rxTick, star: xy.x > xy.y, line: 'Home vs ' + r.away_name, extra: when, order: i * 2 });
+        rxItems.push({ team: r.home_name, rx: hp / ap, tick: rxTick, star: xy.x > xy.y, heart: hr !== null && hr.home, line: 'Home vs ' + r.away_name, extra: when, order: i * 2 });
       }
       if (q.away) {
-        rxItems.push({ team: r.away_name, rx: ap / hp, tick: rxTick, star: xy.y > xy.x, line: 'Away at ' + r.home_name, extra: when, order: i * 2 + 1 });
+        rxItems.push({ team: r.away_name, rx: ap / hp, tick: rxTick, star: xy.y > xy.x, heart: hr !== null && hr.away, line: 'Away at ' + r.home_name, extra: when, order: i * 2 + 1 });
       }
       if (isDraw(hsH, hcH, asH, acH)) {
         const info = drawInfo(hsH, hcH, asH, acH);
@@ -709,11 +753,12 @@ function rankPastedGroup(rows: PastedRow[], basketball: boolean): string[] {
     const sup = support(hsH, hcH, asH, acH);
     const rxTick = sup !== null && sup.big;
     const xy = score2Xy(hsH, hcH, asH, acH);
+    const hr = heartRates(hsH, hcH, asH, acH);
     if (q.home) {
-      rxItems.push({ team: homeName, rx: hp / ap, tick: rxTick, star: xy.x > xy.y, line: 'Home vs ' + awayName, extra: league, order: i * 2 });
+      rxItems.push({ team: homeName, rx: hp / ap, tick: rxTick, star: xy.x > xy.y, heart: hr !== null && hr.home, line: 'Home vs ' + awayName, extra: league, order: i * 2 });
     }
     if (q.away) {
-      rxItems.push({ team: awayName, rx: ap / hp, tick: rxTick, star: xy.y > xy.x, line: 'Away at ' + homeName, extra: league, order: i * 2 + 1 });
+      rxItems.push({ team: awayName, rx: ap / hp, tick: rxTick, star: xy.y > xy.x, heart: hr !== null && hr.away, line: 'Away at ' + homeName, extra: league, order: i * 2 + 1 });
     }
     if (!basketball && isDraw(hsH, hcH, asH, acH)) {
       const info = drawInfo(hsH, hcH, asH, acH);
