@@ -2,7 +2,7 @@
 // Home point = ((hs / (1 + hc)) * ac) / (1 + as)
 // Away point = ((as / (1 + ac)) * hc) / (1 + hs)
 // Every side gets its own point; sides go in ONE list, highest first.
-//   Only the top N sides are shown, where N = the number of matches (20 matches -> top 20).
+//   Only the top N sides are shown, where N = the number of matches (20 matches -> top N).
 // SUPPORTING FORMULA: X = hs/hc + ac/as (Home), Y = as/ac + hc/hs (Away), D2 = |X - Y|.
 //   If hs, hc, as or ac is 0 there is no supporting result (no tick, tag shows "-").
 //   Exact integer maths (X = N/(hc*as), Y = N/(ac*hs), N = hs*as + ac*hc).
@@ -12,17 +12,17 @@
 //   A side gets a check mark when D2 >= 3 (3 included).
 //   A side gets a star when its own X:Y number (score 2 x average scored, rounded half up)
 //   is bigger than its opponent's. A tie gets no star.
-//   A side gets a heart from the HEART FORMULA (below) when its rate is 1.5 or more.
-//   The rate is shown in brackets next to the heart.
-//   TRUST (T): every RX 2+ side that has a heart rate (even below 1.5) shows its rate in
-//   brackets and T after it. a = rx, b = heart rate, a >= 0, b >= 0, a + b > 0:
+//   A side gets a heart only when its T (TRUST, below) is 60 or more (60 included).
+//   The heart rate no longer decides the heart.
+//   TRUST (T): every RX 2+ side that has a heart rate (see HEART FORMULA) shows T in brackets,
+//   and the heart when T is 60 or more. a = rx, b = heart rate, a >= 0, b >= 0, a + b > 0:
 //   D = |a - b| / (a + b), T = 100 * D (0 to 100).
-//   A side with no heart result (a zero average) shows no T.
+//   A side with no heart result (a zero average) shows no T and no heart.
 // HEART FORMULA (one single formula, exact integer maths, averages in hundredths):
 //   Home = 1/((27/40)*hc) + (9/40)*ac + 1/((3/40)*as) + (1/40)*hs
 //   Away = 1/((27/40)*ac) + (9/40)*hc + 1/((3/40)*hs) + (1/40)*as
 //   The predicted side is the RX side. Home side: rate = Home / Away. Away side: rate = Away / Home.
-//   Rate 1.5 or more (1.5 included) = heart. If hs, hc, as or ac is 0 there is no result.
+//   The rate is the b value used by T. If hs, hc, as or ac is 0 there is no result.
 // DRAW section (football only): a match qualifies when |Home point - Away point| (main D) is
 //   between 0.0 and 0.2, both ends included (exact integer maths). Closest first. A match gets
 //   a tick only when BOTH the main D and D2 are between 0 and 0.2 (included). Each match shows
@@ -98,8 +98,10 @@ export function hHundredths(fH: number, hcH: number, acH: number): number | null
 // With every average in hundredths the Home value is nh/dh and the Away value is na/da:
 //   nh = 48,000,000*as + 729*ac*hc*as + 432,000,000*hc + 81*hs*hc*as,  dh = 324,000*hc*as
 //   na = 48,000,000*hs + 729*hc*ac*hs + 432,000,000*ac + 81*as*ac*hs,  dh = 324,000*ac*hs
-// home = Home/Away is 1.5 or more (a Home side gets the heart). away = Away/Home is 1.5 or more.
-// rateHome and rateAway are the two rates (shown in brackets next to the heart).
+// home = Home/Away is 1.5 or more. away = Away/Home is 1.5 or more.
+// (The ranking list no longer uses home/away for the heart: T decides it. They are kept
+// because lib/fd/track.ts still reads them.)
+// rateHome and rateAway are the two rates (the b value used by T).
 // null when hs, hc, as or ac is 0 (a denominator would be 0).
 export function heartRates(
   hs: number,
@@ -186,8 +188,8 @@ type RxItem = {
   rx: number;
   tick: boolean;
   star: boolean;
-  heart: boolean;
-  heartRate: number | null; // the heart rate (null = no heart result), shown in brackets with T
+  heart: boolean; // not used for the heart symbol any more (T decides it), kept as it was
+  heartRate: number | null; // the heart rate (null = no heart result), the b value used by T
   line: string;
   extra: string;
   order: number;
@@ -335,8 +337,8 @@ function rankedEntries(sides: Side[]): string[] {
 
 // The RX 2+ section: one descending list, highest rx first.
 // Check mark when D2 >= 3. Star when the side's X:Y number is bigger than its opponent's.
-// Heart when the heart formula rate is 1.5 or more. Every side with a heart rate shows the rate
-// in brackets and T (trust, from rx and the heart rate). No heart result = no brackets, no T.
+// Every side with a heart rate shows T in brackets (T from rx and the heart rate), and the
+// heart only when T is 60 or more (60 included). No heart result = no brackets, no heart.
 function rxMessages(title: string, items: RxItem[]): string[] {
   const header = 'RX 2+ - ' + title + ' (' + items.length + ')';
   if (items.length === 0) return [header + '\nNone'];
@@ -345,10 +347,9 @@ function rxMessages(title: string, items: RxItem[]): string[] {
     let heartPart = '';
     if (x.heartRate !== null) {
       const t = trustT(x.rx, x.heartRate);
-      heartPart =
-        (x.heart ? ' ❤️' : '') +
-        ' (' + x.heartRate.toFixed(3) + ')' +
-        (t !== null ? ' T ' + t.toFixed(1) : '');
+      if (t !== null) {
+        heartPart = (t >= 60 ? ' ❤️' : '') + ' (' + t.toFixed(1) + ')';
+      }
     }
     return (
       i + 1 + ') ' + x.team + (x.tick ? ' ✅' : '') + (x.star ? ' ⭐' : '') + heartPart +
