@@ -16,6 +16,11 @@
 //   OVER T: T from t (a) and total conceded (b), trustT(a, b). t = home scored + away scored,
 //   total conceded = home conceded + away conceded. Tracked only.
 //   T 60+ (60 included) -> how often Over 2.5 (3+ goals).
+//   OVER P: new score = Home + Away, Home = (1/4)*max(hs,ac) + (3/4)*min(hs,ac),
+//   Away = (1/4)*max(as,hc) + (3/4)*min(as,hc). A = f (2 decimals), B = new score,
+//   P = 100 * sqrt(A*B) / (1 + sqrt(A*B)). Tracked only.
+//   P 80+ -> how often Over 3.5 (4+ goals). P 70+ -> how often Over 2.5 (3+ goals).
+//   Each threshold includes its own number.
 //   LIFT = Main / (Main + Others) x 100, where Main = average of the ones that came true and
 //   Others = average of the rest. 50 = no difference.
 //   f BANDS: f = Score 2 x total scored (2 decimals). Band 3+ = 3.00 to 3.99, 4+ = 4.00 to 4.99,
@@ -49,6 +54,22 @@ function round2(n: number): number {
 }
 function hundredths(n: number): number {
   return Math.round(round2(n) * 100);
+}
+
+// New score for OVER P: Home + Away, each = (1/4)*max + (3/4)*min.
+function newScore(hs: number, hc: number, as: number, ac: number): number {
+  const home = 0.25 * Math.max(hs, ac) + 0.75 * Math.min(hs, ac);
+  const away = 0.25 * Math.max(as, hc) + 0.75 * Math.min(as, hc);
+  return home + away;
+}
+
+// P = 100 * sqrt(A*B) / (1 + sqrt(A*B)). null when A*B is not usable.
+function pValue(a: number, b: number): number | null {
+  const ab = a * b;
+  if (!isFinite(ab) || ab < 0) return null;
+  const s = Math.sqrt(ab);
+  const p = (100 * s) / (1 + s);
+  return isFinite(p) ? p : null;
 }
 
 // ── Copy graded matches into the permanent table ──────────────────────────
@@ -230,7 +251,7 @@ function fpct(hits: number, n: number): string {
   return n > 0 ? Math.round((hits * 100) / n) + '% (' + hits + ' of ' + n + ')' : '-';
 }
 
-// Win counter for RX sides (star, heart, both, none, trust). Also used for the OVER T counter.
+// Win counter for RX sides (star, heart, both, none, trust). Also used for the OVER T and OVER P counters.
 type WinCount = { n: number; won: number };
 const newWin = (): WinCount => ({ n: 0, won: 0 });
 function addWin(w: WinCount, won: boolean) {
@@ -273,6 +294,8 @@ export async function trackMessages(
     const starHeartSides = newWin();
     const trustSides = newWin();
     const tOver25 = newWin();
+    const pOver35 = newWin();
+    const pOver25 = newWin();
     let matches = 0;
     let overCount = 0;
     let drawMatches = 0;
@@ -354,6 +377,14 @@ export async function trackMessages(
 
       // f bands: 5+ (5.00 and above), 4+ (4.00 to 4.99), 3+ (3.00 to 3.99).
       const fH = fHundredths(hs, hc, as, ac);
+
+      // OVER P: A = f (2 decimals), B = new score. P 80+ -> Over 3.5, P 70+ -> Over 2.5.
+      const overP = pValue(fH / 100, newScore(hs, hc, as, ac));
+      if (overP !== null) {
+        if (overP >= 80) addWin(pOver35, goals >= 4);
+        if (overP >= 70) addWin(pOver25, goals >= 3);
+      }
+
       if (fH >= 500) {
         f5.n++;
         if (goals >= 4) f5.o35++;
@@ -431,6 +462,10 @@ export async function trackMessages(
     out.push('');
     out.push('OVER T (T from t and total conceded, t = home scored + away scored)');
     out.push('T 60+ : ' + tOver25.n + ' matches, Over 2.5 ' + fpct(tOver25.won, tOver25.n));
+    out.push('');
+    out.push('OVER P (P from f and the new score)');
+    out.push('P 80+ : ' + pOver35.n + ' matches, Over 3.5 ' + fpct(pOver35.won, pOver35.n));
+    out.push('P 70+ : ' + pOver25.n + ' matches, Over 2.5 ' + fpct(pOver25.won, pOver25.n));
     out.push('');
     out.push('Lift = winners avg / (winners avg + others avg) x 100. 50 = no difference. Above 60 = the winners score clearly higher than the others.');
     out.push('Draw: a draw has a SMALL difference, so a lift below 50 is the good sign there.');
