@@ -13,7 +13,7 @@
 //   T of 60 or more (60 included) won.
 //   DRAW: matches in the Draw list, difference |Home point - Away point|; hit = ended level.
 //   OVER: Score, Score 2, Value 1, Value 2 (rate x score); hit = 3 or more goals.
-//   OVER T: T from Score 2 (a) and t = home scored + away scored (b), trustT(a, b). Tracked only.
+//   OVER T: T from Score 1 (a) and Score 2 (b), trustT(a, b). Tracked only.
 //   T 70+ -> how often Over 3.5 (4+ goals). T 60+ -> how often Over 2.5 (3+ goals).
 //   T 55+ -> how often Over 1.5 (2+ goals). Each threshold includes its own number.
 //   LIFT = Main / (Main + Others) x 100, where Main = average of the ones that came true and
@@ -349,8 +349,8 @@ export async function trackMessages(
         addTo(v2, rate * sc2, over);
       }
 
-      // OVER T: T from Score 2 (a) and t = home scored + away scored (b). Tracked only.
-      const overT = trustT(sc2, hs + as);
+      // OVER T: T from Score 1 (a) and Score 2 (b). Tracked only.
+      const overT = trustT(sc1, sc2);
       if (overT !== null) {
         if (overT >= 70) addWin(tOver35, goals >= 4);
         if (overT >= 60) addWin(tOver25, goals >= 3);
@@ -434,7 +434,7 @@ export async function trackMessages(
     out.push('  Over 2.5: ' + fpct(hBand.o25, hBand.n));
     out.push('  Over 3.5: ' + fpct(hBand.o35, hBand.n));
     out.push('');
-    out.push('OVER T (T from Score 2 and t, t = home scored + away scored)');
+    out.push('OVER T (T from Score 1 and Score 2)');
     out.push('T 70+ : ' + tOver35.n + ' matches, Over 3.5 ' + fpct(tOver35.won, tOver35.n));
     out.push('T 60+ : ' + tOver25.n + ' matches, Over 2.5 ' + fpct(tOver25.won, tOver25.n));
     out.push('T 55+ : ' + tOver15.n + ' matches, Over 1.5 ' + fpct(tOver15.won, tOver15.n));
@@ -447,7 +447,7 @@ export async function trackMessages(
     out.push('Averages of matches that already finished. No accuracy is promised.');
     return { ok: true, messages: [out.join('\n')] };
   } catch (e) {
-    console.error('track messages failed');
+    console.error('track.ts failed');
     return { ok: false, error: 'something went wrong' };
   }
 }
