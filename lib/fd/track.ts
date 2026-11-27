@@ -13,10 +13,9 @@
 //   T of 60 or more (60 included) won.
 //   DRAW: matches in the Draw list, difference |Home point - Away point|; hit = ended level.
 //   OVER: Score, Score 2, Value 1, Value 2 (rate x score); hit = 3 or more goals.
-//   OVER T: T from Score 2 (a) and g (b), trustT(a, b). g = smaller conceded / bigger conceded
-//   (home conceded vs away conceded; both 0 = no g, the match is left out). Tracked only.
-//   T 35+ -> how often Over 3.5 (4+ goals). T 30+ -> how often Over 2.5 (3+ goals).
-//   T 25+ -> how often Over 1.5 (2+ goals). Each threshold includes its own number.
+//   OVER T: T from t (a) and total conceded (b), trustT(a, b). t = home scored + away scored,
+//   total conceded = home conceded + away conceded. Tracked only.
+//   T 60+ (60 included) -> how often Over 2.5 (3+ goals).
 //   LIFT = Main / (Main + Others) x 100, where Main = average of the ones that came true and
 //   Others = average of the rest. 50 = no difference.
 //   f BANDS: f = Score 2 x total scored (2 decimals). Band 3+ = 3.00 to 3.99, 4+ = 4.00 to 4.99,
@@ -231,7 +230,7 @@ function fpct(hits: number, n: number): string {
   return n > 0 ? Math.round((hits * 100) / n) + '% (' + hits + ' of ' + n + ')' : '-';
 }
 
-// Win counter for RX sides (star, heart, both, none, trust). Also used for the OVER T counters.
+// Win counter for RX sides (star, heart, both, none, trust). Also used for the OVER T counter.
 type WinCount = { n: number; won: number };
 const newWin = (): WinCount => ({ n: 0, won: 0 });
 function addWin(w: WinCount, won: boolean) {
@@ -273,9 +272,7 @@ export async function trackMessages(
     const noHeartSides = newWin();
     const starHeartSides = newWin();
     const trustSides = newWin();
-    const tOver35 = newWin();
     const tOver25 = newWin();
-    const tOver15 = newWin();
     let matches = 0;
     let overCount = 0;
     let drawMatches = 0;
@@ -350,17 +347,10 @@ export async function trackMessages(
         addTo(v2, rate * sc2, over);
       }
 
-      // OVER T: T from Score 2 (a) and g (b). g = smaller conceded / bigger conceded.
-      // Both conceded averages 0 = no g, so no T. Tracked only.
-      const gBig = Math.max(hcH, acH);
-      const gSmall = Math.min(hcH, acH);
-      const g = gBig > 0 ? gSmall / gBig : null;
-      const overT = g !== null ? trustT(sc2, g) : null;
-      if (overT !== null) {
-        if (overT >= 35) addWin(tOver35, goals >= 4);
-        if (overT >= 30) addWin(tOver25, goals >= 3);
-        if (overT >= 25) addWin(tOver15, goals >= 2);
-      }
+      // OVER T: T from t (a) and total conceded (b). t = home scored + away scored,
+      // total conceded = home conceded + away conceded. Tracked only.
+      const overT = trustT(hs + as, hc + ac);
+      if (overT !== null && overT >= 60) addWin(tOver25, goals >= 3);
 
       // f bands: 5+ (5.00 and above), 4+ (4.00 to 4.99), 3+ (3.00 to 3.99).
       const fH = fHundredths(hs, hc, as, ac);
@@ -439,16 +429,13 @@ export async function trackMessages(
     out.push('  Over 2.5: ' + fpct(hBand.o25, hBand.n));
     out.push('  Over 3.5: ' + fpct(hBand.o35, hBand.n));
     out.push('');
-    out.push('OVER T (T from Score 2 and g, g = smaller conceded / bigger conceded)');
-    out.push('T 35+ : ' + tOver35.n + ' matches, Over 3.5 ' + fpct(tOver35.won, tOver35.n));
-    out.push('T 30+ : ' + tOver25.n + ' matches, Over 2.5 ' + fpct(tOver25.won, tOver25.n));
-    out.push('T 25+ : ' + tOver15.n + ' matches, Over 1.5 ' + fpct(tOver15.won, tOver15.n));
+    out.push('OVER T (T from t and total conceded, t = home scored + away scored)');
+    out.push('T 60+ : ' + tOver25.n + ' matches, Over 2.5 ' + fpct(tOver25.won, tOver25.n));
     out.push('');
     out.push('Lift = winners avg / (winners avg + others avg) x 100. 50 = no difference. Above 60 = the winners score clearly higher than the others.');
     out.push('Draw: a draw has a SMALL difference, so a lift below 50 is the good sign there.');
     out.push('⭐ = the side X:Y number was bigger than its opponent. ❤️ = T (trust) was 60 or more. A draw counts as not winning.');
     out.push('Over 1.5 = 2+ goals, Over 2.5 = 3+ goals, Over 3.5 = 4+ goals.');
-    out.push('OVER T groups overlap: a match with T 35+ is also counted in T 30+ and T 25+. Matches with no g are left out.');
     out.push('Averages of matches that already finished. No accuracy is promised.');
     return { ok: true, messages: [out.join('\n')] };
   } catch (e) {
