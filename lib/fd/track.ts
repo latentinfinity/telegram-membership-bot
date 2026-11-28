@@ -16,6 +16,10 @@
 //   heart rate gets T (trustT from rx and the heart rate). Reports how often the sides with
 //   T of 60 or more (60 included) won.
 //   DRAW: matches in the Draw list, difference |Home point - Away point|; hit = ended level.
+//   GG + OVER 2.5: matches in the GG + Over 2.5 list of the ranking (ggOverQualifies: NEW SCORE
+//   Home 1.7+, Away 1.7+, Home + Away 3.5+). Hit = both teams scored (1+ goal each) AND 3 or more
+//   goals. Also reports, for the same matches, how often both teams scored (GG alone) and how
+//   often they went Over 2.5 alone.
 //   OVER: Score, Score 2, Value 1, Value 2 (rate x score); hit = 3 or more goals.
 //   OVER P: new score = Home + Away, Home = (1/4)*max(hs,ac) + (3/4)*min(hs,ac),
 //   Away = (1/4)*max(as,hc) + (3/4)*min(as,hc). A = f (2 decimals), B = new score,
@@ -40,6 +44,7 @@ import {
   overRate,
   rxQualifies,
   boomQualifies,
+  ggOverQualifies,
   isDraw,
   fHundredths,
   hHundredths,
@@ -299,6 +304,9 @@ export async function trackMessages(
     const boomSides = newWin(); // RX 2+ sides with 💥 (NEW SCORE rate 2+)
     const starHeartBoomSides = newWin(); // RX 2+ sides with ⭐, ❤️ and 💥 together
     const trustSides = newWin();
+    const ggBoth = newWin(); // GG + Over 2.5 list: both teams scored AND 3+ goals
+    const ggOnly = newWin(); // same matches: both teams scored
+    const ggOver25 = newWin(); // same matches: 3+ goals
     const pOver35 = newWin(); // P 80+ -> Over 3.5
     const p80Over25 = newWin(); // P 80+ -> Over 2.5
     const pOver25 = newWin(); // P 70+ -> Over 2.5
@@ -376,6 +384,16 @@ export async function trackMessages(
       const goals = rh + ra;
       const over = goals >= 3;
       if (over) overCount++;
+
+      // GG + OVER 2.5: matches in the ranking's GG + Over 2.5 list.
+      // Hit = both teams scored AND 3+ goals. Also counted: GG alone and Over 2.5 alone.
+      if (ggOverQualifies(hsH, hcH, asH, acH)) {
+        const bothScored = rh >= 1 && ra >= 1;
+        addWin(ggBoth, bothScored && over);
+        addWin(ggOnly, bothScored);
+        addWin(ggOver25, over);
+      }
+
       const sc1 = overScore(hs, hc, as, ac);
       const sc2 = overScore2(hs, hc, as, ac);
       addTo(s1, sc1, over);
@@ -461,6 +479,12 @@ export async function trackMessages(
     out.push('Draw list matches: ' + drawMatches + ', ended level ' + drawHits + ' (' + (drawMatches > 0 ? Math.round((drawHits * 100) / drawMatches) + '%' : '-') + ')');
     out.push(line('Difference', drawAcc, 'draws', 'others'));
     out.push('');
+    out.push('GG + OVER 2.5 (both teams scored and 3 or more goals)');
+    out.push('GG + Over 2.5 list matches: ' + ggBoth.n);
+    out.push('  GG + Over 2.5: ' + fpct(ggBoth.won, ggBoth.n));
+    out.push('  GG alone (both scored): ' + fpct(ggOnly.won, ggOnly.n));
+    out.push('  Over 2.5 alone: ' + fpct(ggOver25.won, ggOver25.n));
+    out.push('');
     out.push('OVER 2.5 (3 or more goals)');
     out.push('Matches: ' + matches + ', went over ' + overCount + ' (' + Math.round((overCount * 100) / matches) + '%)');
     out.push(line('Score  ', s1, 'over', 'not over'));
@@ -496,6 +520,7 @@ export async function trackMessages(
     out.push('Lift = winners avg / (winners avg + others avg) x 100. 50 = no difference. Above 60 = the winners score clearly higher than the others.');
     out.push('Draw: a draw has a SMALL difference, so a lift below 50 is the good sign there.');
     out.push('⭐ = the side X:Y number was bigger than its opponent. ❤️ = T (trust) was 60 or more. 💥 = the NEW SCORE rate (Home/Away for a home side, Away/Home for an away side) was 2 or more. A draw counts as not winning.');
+    out.push('GG + Over 2.5 list = NEW SCORE Home 1.7+, Away 1.7+ and Home + Away 3.5+. GG = both teams scored at least 1 goal.');
     out.push('Over 1.5 = 2+ goals, Over 2.5 = 3+ goals, Over 3.5 = 4+ goals.');
     out.push('OVER P groups overlap: a match with P 80+ is also counted in P 70+.');
     out.push('Averages of matches that already finished. No accuracy is promised.');

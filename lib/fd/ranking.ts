@@ -31,6 +31,10 @@
 //   between 0.0 and 0.2, both ends included (exact integer maths). Closest first. A match gets
 //   a tick only when BOTH the main D and D2 are between 0 and 0.2 (included). Each match shows
 //   the tag (main stronger, supporting stronger), e.g. (Home, Away).
+// GG + OVER 2.5 section (football only, after DRAW, before the OVER RANKING): a match qualifies
+//   when the NEW SCORE Home part is 1.7 or more, the NEW SCORE Away part is 1.7 or more, and
+//   Home + Away is 3.5 or more (each number included, exact integer maths). Ranked by
+//   Home + Away, highest first. The number in brackets is Home + Away.
 // SCORE 2 = min(hs,ac)/(1+max(hs,ac)) + min(as,hc)/(1+max(as,hc)). Its home part and away part
 //   give X:Y: X = home part * hs, Y = away part * as, each rounded half up (0.5 up).
 // f = Score 2 * total scored (t = hs + as), rounded to 2 decimals.
@@ -52,11 +56,11 @@
 // BASKETBALL (pasted matches only): the word Basketball on the first line of the paste marks
 //   every match in it as basketball (the stored league starts with "Basketball"). Basketball
 //   gets the same WIN ranking and RX 2+ (with the D2 tick, the X:Y star, the 💥 and the heart),
-//   NO Draw, and its Over lists.
+//   NO Draw, NO GG + Over 2.5, and its Over lists.
 // Part 1: one competition's stored pending matches (fd_fixtures). Football only.
 // Part 2: the matches pasted into the storage (one list across all leagues).
 // Exported for lib/fd/track.ts and lib/fd/scoreXY.ts: isDraw, rxQualifies, overRate, the score
-// functions, fHundredths, hHundredths, heartRates, score2Xy and boomQualifies.
+// functions, fHundredths, hHundredths, heartRates, score2Xy, boomQualifies and ggOverQualifies.
 import { createAdminClient } from '@/lib/supabase/admin';
 
 const LIMIT = 3500;
@@ -121,6 +125,15 @@ export function boomQualifies(hsH: number, hcH: number, asH: number, acH: number
     home: awayPart > 0 && homePart >= 2 * awayPart,
     away: homePart > 0 && awayPart >= 2 * homePart,
   };
+}
+
+// GG + OVER 2.5 test on the NEW SCORE parts, exact integer maths, averages in hundredths.
+//   The parts are in 1/400 (see boomQualifies), so 1.7 = 680 and 3.5 = 1400.
+//   Qualifies when Home part >= 1.7, Away part >= 1.7 and Home + Away >= 3.5 (all included).
+export function ggOverQualifies(hsH: number, hcH: number, asH: number, acH: number): boolean {
+  const homePart = Math.max(hsH, acH) + 3 * Math.min(hsH, acH);
+  const awayPart = Math.max(asH, hcH) + 3 * Math.min(asH, hcH);
+  return homePart >= 680 && awayPart >= 680 && homePart + awayPart >= 1400;
 }
 
 // P = 100 * sqrt(A*B) / (1 + sqrt(A*B)). null when A*B is not usable.
@@ -251,6 +264,14 @@ type DrawEntry = {
   diff: number;
   tick: boolean;
   tag: string;
+  extra: string;
+  order: number;
+};
+type GgEntry = {
+  label: string;
+  home: number; // NEW SCORE Home part
+  away: number; // NEW SCORE Away part
+  sum: number; // Home + Away
   extra: string;
   order: number;
 };
@@ -422,6 +443,21 @@ function drawMessages(title: string, draws: DrawEntry[]): string[] {
       i + 1 + ') ' + d.label + (d.tick ? ' ✅' : '') + ' ' + d.tag +
       '\nHome ' + d.home.toFixed(3) + ' | Away ' + d.away.toFixed(3) +
       ' | difference ' + d.diff.toFixed(3) + (d.extra ? '\n' + d.extra : '')
+  );
+  return pack(header, entries, '');
+}
+
+// The GG + OVER 2.5 section (football only): highest Home + Away first.
+// The number in brackets is Home + Away (NEW SCORE parts).
+function ggMessages(title: string, items: GgEntry[]): string[] {
+  const header = 'GG + OVER 2.5 - ' + title + ' (' + items.length + ')';
+  if (items.length === 0) return [header + '\nNone'];
+  const sorted = items.slice().sort((a, b) => b.sum - a.sum || a.order - b.order);
+  const entries = sorted.map(
+    (g, i) =>
+      i + 1 + ') ' + g.label + ' (' + g.sum.toFixed(2) + ')' +
+      '\nHome ' + g.home.toFixed(2) + ' | Away ' + g.away.toFixed(2) +
+      (g.extra ? '\n' + g.extra : '')
   );
   return pack(header, entries, '');
 }
@@ -612,6 +648,7 @@ export async function rankCompetition(
     const sides: Side[] = [];
     const rxItems: RxItem[] = [];
     const draws: DrawEntry[] = [];
+    const ggItems: GgEntry[] = [];
     const overs: OverItem[] = [];
     const notRanked: string[] = [];
     rows.forEach((r, i) => {
@@ -673,6 +710,17 @@ export async function rankCompetition(
           order: i,
         });
       }
+      if (ggOverQualifies(hsH, hcH, asH, acH)) {
+        const parts = newScoreParts(hs, hc, as, ac);
+        ggItems.push({
+          label: r.home_name + ' - ' + r.away_name,
+          home: parts.home,
+          away: parts.away,
+          sum: parts.home + parts.away,
+          extra: when,
+          order: i,
+        });
+      }
       const fH = fHundredths(hs, hc, as, ac);
       overs.push({
         name: r.home_name + ' - ' + r.away_name,
@@ -700,6 +748,7 @@ export async function rankCompetition(
     const messages = pack(header, rankedEntries(sides), footerParts.join('\n\n'))
       .concat(rxMessages(name, rxItems))
       .concat(drawMessages(name, draws))
+      .concat(ggMessages(name, ggItems))
       .concat(overMessages(name, overs));
     return { ok: true, messages };
   } catch (e) {
@@ -731,6 +780,7 @@ function rankPastedGroup(rows: PastedRow[], basketball: boolean): string[] {
   const sides: Side[] = [];
   const rxItems: RxItem[] = [];
   const draws: DrawEntry[] = [];
+  const ggItems: GgEntry[] = [];
   const overs: OverItem[] = [];
   const unreadable: string[] = [];
   rows.forEach((r, i) => {
@@ -794,6 +844,17 @@ function rankPastedGroup(rows: PastedRow[], basketball: boolean): string[] {
         order: i,
       });
     }
+    if (!basketball && ggOverQualifies(hsH, hcH, asH, acH)) {
+      const np = newScoreParts(hs, hc, as, ac);
+      ggItems.push({
+        label: r.name,
+        home: np.home,
+        away: np.away,
+        sum: np.home + np.away,
+        extra: league,
+        order: i,
+      });
+    }
     const fH = fHundredths(hs, hc, as, ac);
     overs.push({
       name: r.name,
@@ -825,7 +886,10 @@ function rankPastedGroup(rows: PastedRow[], basketball: boolean): string[] {
   if (basketball) {
     out = out.concat(overBasketballMessages('pasted matches', overs));
   } else {
-    out = out.concat(drawMessages(label, draws)).concat(overMessages(label, overs));
+    out = out
+      .concat(drawMessages(label, draws))
+      .concat(ggMessages(label, ggItems))
+      .concat(overMessages(label, overs));
   }
   return out;
 }
