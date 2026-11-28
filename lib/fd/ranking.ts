@@ -45,12 +45,17 @@
 // P = 100 * sqrt(A*B) / (1 + sqrt(A*B)), A = f (2 decimals), B = NeoSum.
 // Q = the same formula as P (qValue), with A = t (home scored + away scored) and
 //   B = total conceded (home conceded + away conceded).
+// C: A = (6/7)*min(ac,hc) + (1/7)*max(ac,hc), B = (6/7)*min(as,hs) + (1/7)*max(as,hs),
+//   C = 100 * sqrt(A*B) / (1 + sqrt(A*B)). Exact integer maths (cAtLeast65): C >= 65 <=>
+//   A*B >= 169/49 (65 included).
 // h = f * g, g = smaller conceded / bigger conceded (home conceded vs away conceded; both 0 = no g),
 //   h rounded to 2 decimals (hHundredths).
-// FOOTBALL OVER RANKING (main list): every match with f of 2.00 or more, ranked by f, highest first.
-//   The brackets are (f)(P), P with 1 decimal. Matches with f below 2.00 are removed.
-//   A match gets a star when: f from 3.00 to 3.99 and P 80 or more, or f from 4.00 to 4.99 and
-//   P 80 or more, or f 5.00 or more and P 83 or more (83 included). One star at most.
+// FOOTBALL OVER RANKING (main list): every match with f of 3.00 or more (3.00 included), ranked by f,
+//   highest first. Matches with f below 3.00 are removed.
+//   The brackets are (f)(P), P with 1 decimal. A match gets a star when: f from 3.00 to 3.99 and
+//   P 80 or more, or f from 4.00 to 4.99 and P 80 or more, or f 5.00 or more and P 83 or more
+//   (83 included). One star at most.
+//   A match gets a ❤️ when its C is 65 or more (65 included).
 // BASKETBALL main list: every match, highest Score (X + Y) first. Bracket number: Score - 10, floored.
 // There are no top 10 lists any more.
 // FOOTBALL h LIST (after the main list): matches with f 3.00 or more and h 3.00 or more.
@@ -72,7 +77,7 @@
 // Part 2: the matches pasted into the storage (one list across all leagues).
 // Exported for lib/fd/track.ts and lib/fd/scoreXY.ts: isDraw, rxQualifies, overRate, the score
 // functions, fHundredths, hHundredths, heartRates, score2Xy, boomQualifies, ggOverQualifies,
-// neoParts400 and qValue.
+// neoParts400, qValue and cAtLeast65.
 import { createAdminClient } from '@/lib/supabase/admin';
 
 const LIMIT = 3500;
@@ -168,6 +173,17 @@ export function pValue(a: number, b: number): number | null {
 // B = total conceded (home conceded + away conceded, 2 decimals). null when not usable.
 export function qValue(totalScored: number, totalConceded: number): number | null {
   return pValue(totalScored, totalConceded);
+}
+
+// C: A = (6/7)*min(ac,hc) + (1/7)*max(ac,hc), B = (6/7)*min(as,hs) + (1/7)*max(as,hs).
+// With the averages in hundredths, A*7 = 6*min(acH,hcH) + max(acH,hcH) and
+// B*7 = 6*min(asH,hsH) + max(asH,hsH), exact integers. A*B = (A*7 x B*7) / 490000.
+// C = 100*sqrt(A*B)/(1+sqrt(A*B)) is 65 or more exactly when A*B >= 169/49,
+// that is (A*7 x B*7) >= 1,690,000 (65 included). Exact integer maths.
+export function cAtLeast65(hsH: number, hcH: number, asH: number, acH: number): boolean {
+  const aH7 = 6 * Math.min(acH, hcH) + Math.max(acH, hcH);
+  const bH7 = 6 * Math.min(asH, hsH) + Math.max(asH, hsH);
+  return aH7 * bH7 >= 1690000;
 }
 
 // Star for the football main list. fH = f in hundredths.
@@ -310,6 +326,7 @@ type OverItem = {
   score2: number;
   fH: number; // f = Score 2 * total scored, in hundredths
   p: number | null; // P from f and NeoSum (null = not usable)
+  c65: boolean; // C is 65 or more (65 included): the football over ranking shows ❤️
   extra: string;
   order: number;
 };
@@ -601,15 +618,16 @@ function hListBasketMessages(title: string, items: OverItem[]): string[] {
 }
 
 // The football OVER RANKING: ranked by f (Score 2 x total scored), highest first.
-// Matches with f below 2.00 are removed. The brackets are (f)(P), then a star by the star rule.
+// Matches with f below 3.00 are removed (3.00 stays). The brackets are (f)(P), then a star by the
+// star rule, then ❤️ when C is 65 or more (65 included).
 // Then the h list, then the two P+Q h lists (f 4.00 to 4.99, f 3.00 to 3.99).
 function overMessages(title: string, items: OverItem[]): string[] {
   if (items.length === 0) return ['OVER RANKING (f, highest first) - ' + title + ' (0)\nNone'];
 
-  const kept = items.filter((m) => m.fH >= 200);
+  const kept = items.filter((m) => m.fH >= 300);
   const removed = items.length - kept.length;
   const header = 'OVER RANKING (f, highest first) - ' + title + ' (' + kept.length + ')';
-  const footer = removed > 0 ? removed + ' match(es) with f below 2.00 are not listed.' : '';
+  const footer = removed > 0 ? removed + ' match(es) with f below 3.00 are not listed.' : '';
 
   let first: string[];
   if (kept.length === 0) {
@@ -621,6 +639,7 @@ function overMessages(title: string, items: OverItem[]): string[] {
         i + 1 + ') ' + m.name + ' (' + (m.fH / 100).toFixed(2) + ')' +
         (m.p !== null ? '(' + m.p.toFixed(1) + ')' : '') +
         (overStar(m.fH, m.p) ? ' ⭐' : '') +
+        (m.c65 ? ' ❤️' : '') +
         '\nt ' + (m.tHundredths / 100).toFixed(2) +
         ' | Score 2 ' + m.score2.toFixed(3) + (m.extra ? '\n' + m.extra : '')
     );
@@ -803,6 +822,7 @@ export async function rankCompetition(
         score2: overScore2(hs, hc, as, ac),
         fH,
         p: pValue(fH / 100, newScore(hs, hc, as, ac)),
+        c65: cAtLeast65(hsH, hcH, asH, acH),
         extra: when,
         order: i,
       });
@@ -937,6 +957,7 @@ function rankPastedGroup(rows: PastedRow[], basketball: boolean): string[] {
       score2: overScore2(hs, hc, as, ac),
       fH,
       p: pValue(fH / 100, newScore(hs, hc, as, ac)),
+      c65: cAtLeast65(hsH, hcH, asH, acH),
       extra: league,
       order: i,
     });
