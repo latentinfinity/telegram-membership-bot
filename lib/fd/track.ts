@@ -27,6 +27,11 @@
 //   f 4+ AND NEOSUM 4+: matches where BOTH f is 4.00 or more (4 included) AND NeoSum is 4 or
 //   more (4 included). Reports how often they produced Over 3.5 (4+ goals) and Over 2.5
 //   (3+ goals).
+//   C: A = (6/7)*min(ac,hc) + (1/7)*max(ac,hc), B = (6/7)*min(as,hs) + (1/7)*max(as,hs),
+//   C = 100 * sqrt(A*B) / (1 + sqrt(A*B)). Exact integer maths (A and B in 1/700 units):
+//   C > 60 <=> A*B > 2.25, C >= 65 <=> A*B >= 169/49.
+//   C > 60 (strictly greater) and f 3+ (f 3.00 or more) -> how often Over 2.5 (3+ goals).
+//   C >= 65 (65 included) and f 4+ (f 4.00 or more) -> how often Over 3.5 (4+ goals).
 //   OVER: Score, Score 2, Value 1, Value 2 (rate x score); hit = 3 or more goals.
 //   OVER P: Neo Home = (1/4)*max(hs,ac) + (3/4)*min(hs,ac),
 //   Neo Away = (1/4)*max(as,hc) + (3/4)*min(as,hc), NeoSum = Neo Home + Neo Away.
@@ -88,6 +93,18 @@ function pValue(a: number, b: number): number | null {
   const s = Math.sqrt(ab);
   const p = (100 * s) / (1 + s);
   return isFinite(p) ? p : null;
+}
+
+// C: A = (6/7)*min(ac,hc) + (1/7)*max(ac,hc), B = (6/7)*min(as,hs) + (1/7)*max(as,hs).
+// Returns A*7 and B*7 in hundredths (so in 1/700 units), exact integers.
+//   aH7 = 6*min(acH,hcH) + max(acH,hcH),  bH7 = 6*min(asH,hsH) + max(asH,hsH).
+// A*B = aH7*bH7 / 490000. C = 100*sqrt(A*B)/(1+sqrt(A*B)) is above 60 exactly when A*B > 2.25,
+// that is aH7*bH7 > 1,102,500, and is 65 or more exactly when A*B >= 169/49, that is
+// aH7*bH7 >= 1,690,000.
+function cProduct700(hsH: number, hcH: number, asH: number, acH: number): number {
+  const aH7 = 6 * Math.min(acH, hcH) + Math.max(acH, hcH);
+  const bH7 = 6 * Math.min(asH, hsH) + Math.max(asH, hsH);
+  return aH7 * bH7;
 }
 
 // ── Copy graded matches into the permanent table ──────────────────────────
@@ -269,7 +286,7 @@ function fpct(hits: number, n: number): string {
   return n > 0 ? Math.round((hits * 100) / n) + '% (' + hits + ' of ' + n + ')' : '-';
 }
 
-// Win counter for RX sides (star, heart, both, none, trust, boom). Also used for the GG, NeoSum and OVER P counters.
+// Win counter for RX sides (star, heart, both, none, trust, boom). Also used for the GG, NeoSum, C and OVER P counters.
 type WinCount = { n: number; won: number };
 const newWin = (): WinCount => ({ n: 0, won: 0 });
 function addWin(w: WinCount, won: boolean) {
@@ -320,6 +337,8 @@ export async function trackMessages(
     const neoSum4Over25 = newWin(); // NeoSum 4+ -> Over 2.5 (3+ goals)
     const fNeo4Over35 = newWin(); // f 4+ AND NeoSum 4+ -> Over 3.5 (4+ goals)
     const fNeo4Over25 = newWin(); // f 4+ AND NeoSum 4+ -> Over 2.5 (3+ goals)
+    const c60f3Over25 = newWin(); // C > 60 and f 3+ -> Over 2.5 (3+ goals)
+    const c65f4Over35 = newWin(); // C >= 65 and f 4+ -> Over 3.5 (4+ goals)
     const pOver35 = newWin(); // P 80+ -> Over 3.5
     const p80Over25 = newWin(); // P 80+ -> Over 2.5
     const pOver25 = newWin(); // P 70+ -> Over 2.5
@@ -425,6 +444,16 @@ export async function trackMessages(
         }
       }
 
+      // C: C > 60 and f 3+ (fH 300 or more) -> Over 2.5. C >= 65 and f 4+ (fH 400 or more) -> Over 3.5.
+      // Exact: C > 60 <=> product > 1,102,500. C >= 65 <=> product >= 1,690,000 (product = A*7 x B*7, hundredths).
+      const cProd = cProduct700(hsH, hcH, asH, acH);
+      if (cProd > 1102500 && fH >= 300) {
+        addWin(c60f3Over25, goals >= 3);
+      }
+      if (cProd >= 1690000 && fH >= 400) {
+        addWin(c65f4Over35, goals >= 4);
+      }
+
       const sc1 = overScore(hs, hc, as, ac);
       const sc2 = overScore2(hs, hc, as, ac);
       addTo(s1, sc1, over);
@@ -523,6 +552,12 @@ export async function trackMessages(
     out.push('  Over 3.5: ' + fpct(fNeo4Over35.won, fNeo4Over35.n));
     out.push('  Over 2.5: ' + fpct(fNeo4Over25.won, fNeo4Over25.n));
     out.push('');
+    out.push('C (from the conceded and the scored averages)');
+    out.push('C above 60 and f 3+: ' + c60f3Over25.n + ' matches');
+    out.push('  Over 2.5: ' + fpct(c60f3Over25.won, c60f3Over25.n));
+    out.push('C 65+ and f 4+: ' + c65f4Over35.n + ' matches');
+    out.push('  Over 3.5: ' + fpct(c65f4Over35.won, c65f4Over35.n));
+    out.push('');
     out.push('OVER 2.5 (3 or more goals)');
     out.push('Matches: ' + matches + ', went over ' + overCount + ' (' + Math.round((overCount * 100) / matches) + '%)');
     out.push(line('Score  ', s1, 'over', 'not over'));
@@ -560,8 +595,9 @@ export async function trackMessages(
     out.push('⭐ = the side X:Y number was bigger than its opponent. ❤️ = T (trust) was 60 or more. 💥 = the Neo rate (Neo Home/Neo Away for a home side, Neo Away/Neo Home for an away side) was 2 or more. A draw counts as not winning.');
     out.push('GG + Over 2.5 list = Neo Home 1.7+, Neo Away 1.7+ and NeoSum 3.5+. GG = both teams scored at least 1 goal.');
     out.push('NeoSum 4.5+ = Neo Home + Neo Away of 4.5 or more (4.5 included). NeoSum 4+ = 4 or more (4 included). f 4+ = f of 4.00 or more (4 included).');
+    out.push('C: A = 6/7 x smaller conceded + 1/7 x bigger conceded, B = 6/7 x smaller scored + 1/7 x bigger scored, C = P formula on A and B. C above 60 = strictly more than 60. C 65+ = 65 included. f 3+ = f of 3.00 or more, f 4+ = f of 4.00 or more.');
     out.push('Over 1.5 = 2+ goals, Over 2.5 = 3+ goals, Over 3.5 = 4+ goals.');
-    out.push('NeoSum groups overlap: a match with NeoSum 4.5+ is also counted in NeoSum 4+, and f 4+ with NeoSum 4+ is a part of NeoSum 4+. OVER P groups overlap too: a match with P 80+ is also counted in P 70+.');
+    out.push('NeoSum groups overlap: a match with NeoSum 4.5+ is also counted in NeoSum 4+, and f 4+ with NeoSum 4+ is a part of NeoSum 4+. The two C groups can overlap each other and the f bands. OVER P groups overlap too: a match with P 80+ is also counted in P 70+.');
     out.push('Averages of matches that already finished. No accuracy is promised.');
     return { ok: true, messages: [out.join('\n')] };
   } catch (e) {
