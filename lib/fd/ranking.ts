@@ -12,9 +12,9 @@
 //   A side gets a check mark when D2 >= 3 (3 included).
 //   A side gets a star when its own X:Y number (score 2 x average scored, rounded half up)
 //   is bigger than its opponent's. A tie gets no star.
-//   A side gets a 💥 when its NEW SCORE rate is 2 or more (2 included). The rate uses the two
-//   parts of the NEW SCORE (see below): Home side: rate = NEW SCORE Home / NEW SCORE Away.
-//   Away side: rate = NEW SCORE Away / NEW SCORE Home. If the opposing part is 0 there is no
+//   A side gets a 💥 when its Neo rate is 2 or more (2 included). The rate uses the two
+//   parts of Neo (see below): Home side: rate = Neo Home / Neo Away.
+//   Away side: rate = Neo Away / Neo Home. If the opposing part is 0 there is no
 //   rate and no 💥. Exact integer maths. Only the symbol is shown, not the number.
 //   A side gets a heart only when its T (TRUST, below) is 60 or more (60 included).
 //   The heart rate no longer decides the heart.
@@ -32,15 +32,17 @@
 //   a tick only when BOTH the main D and D2 are between 0 and 0.2 (included). Each match shows
 //   the tag (main stronger, supporting stronger), e.g. (Home, Away).
 // GG + OVER 2.5 section (football only, after DRAW, before the OVER RANKING): a match qualifies
-//   when the NEW SCORE Home part is 1.7 or more, the NEW SCORE Away part is 1.7 or more, and
-//   Home + Away is 3.5 or more (each number included, exact integer maths). Ranked by
-//   Home + Away, highest first. The number in brackets is Home + Away.
+//   when Neo Home is 1.7 or more, Neo Away is 1.7 or more, and NeoSum (Neo Home + Neo Away)
+//   is 3.5 or more (each number included, exact integer maths). Ranked by NeoSum, highest
+//   first. The number in brackets is NeoSum.
 // SCORE 2 = min(hs,ac)/(1+max(hs,ac)) + min(as,hc)/(1+max(as,hc)). Its home part and away part
 //   give X:Y: X = home part * hs, Y = away part * as, each rounded half up (0.5 up).
 // f = Score 2 * total scored (t = hs + as), rounded to 2 decimals.
-// NEW SCORE = Home + Away, Home = (1/4)*max(hs,ac) + (3/4)*min(hs,ac),
-//   Away = (1/4)*max(as,hc) + (3/4)*min(as,hc).
-// P = 100 * sqrt(A*B) / (1 + sqrt(A*B)), A = f (2 decimals), B = NEW SCORE.
+// NEO: Neo Home = (1/4)*max(hs,ac) + (3/4)*min(hs,ac),
+//   Neo Away = (1/4)*max(as,hc) + (3/4)*min(as,hc).
+//   NeoSum = Neo Home + Neo Away. (In the code: newScoreParts = the two Neo parts,
+//   newScore = NeoSum, neoParts400 = the two Neo parts as exact integers in 1/400.)
+// P = 100 * sqrt(A*B) / (1 + sqrt(A*B)), A = f (2 decimals), B = NeoSum.
 // h = f * g, g = smaller conceded / bigger conceded (home conceded vs away conceded; both 0 = no g),
 //   h rounded to 2 decimals (hHundredths).
 // FOOTBALL OVER RANKING (main list): every match with f of 2.00 or more, ranked by f, highest first.
@@ -60,7 +62,8 @@
 // Part 1: one competition's stored pending matches (fd_fixtures). Football only.
 // Part 2: the matches pasted into the storage (one list across all leagues).
 // Exported for lib/fd/track.ts and lib/fd/scoreXY.ts: isDraw, rxQualifies, overRate, the score
-// functions, fHundredths, hHundredths, heartRates, score2Xy, boomQualifies and ggOverQualifies.
+// functions, fHundredths, hHundredths, heartRates, score2Xy, boomQualifies, ggOverQualifies
+// and neoParts400.
 import { createAdminClient } from '@/lib/supabase/admin';
 
 const LIMIT = 3500;
@@ -100,40 +103,47 @@ export function hHundredths(fH: number, hcH: number, acH: number): number | null
   return Math.floor((2 * fH * small + big) / (2 * big));
 }
 
-// The two parts of the NEW SCORE: Home = (1/4)*max(hs,ac) + (3/4)*min(hs,ac),
-// Away = (1/4)*max(as,hc) + (3/4)*min(as,hc).
+// The two parts of Neo: Neo Home = (1/4)*max(hs,ac) + (3/4)*min(hs,ac),
+// Neo Away = (1/4)*max(as,hc) + (3/4)*min(as,hc).
 export function newScoreParts(hs: number, hc: number, as: number, ac: number): { home: number; away: number } {
   const home = 0.25 * Math.max(hs, ac) + 0.75 * Math.min(hs, ac);
   const away = 0.25 * Math.max(as, hc) + 0.75 * Math.min(as, hc);
   return { home, away };
 }
 
-// NEW SCORE for P: Home + Away, each = (1/4)*max + (3/4)*min.
+// NeoSum for P: Neo Home + Neo Away, each = (1/4)*max + (3/4)*min.
 export function newScore(hs: number, hc: number, as: number, ac: number): number {
   const parts = newScoreParts(hs, hc, as, ac);
   return parts.home + parts.away;
 }
 
-// 💥 test on the NEW SCORE parts, exact integer maths, averages in hundredths.
-//   Home part (in 1/400) = max(hsH,acH) + 3*min(hsH,acH); Away part = max(asH,hcH) + 3*min(asH,hcH).
-//   Home side: Home part / Away part >= 2, and needs Away part > 0.
-//   Away side: Away part / Home part >= 2, and needs Home part > 0.
-export function boomQualifies(hsH: number, hcH: number, asH: number, acH: number): { home: boolean; away: boolean } {
-  const homePart = Math.max(hsH, acH) + 3 * Math.min(hsH, acH);
-  const awayPart = Math.max(asH, hcH) + 3 * Math.min(asH, hcH);
+// The two Neo parts as exact integers in 1/400, with the averages in hundredths.
+//   Neo Home (in 1/400) = max(hsH,acH) + 3*min(hsH,acH); Neo Away = max(asH,hcH) + 3*min(asH,hcH).
+//   So 1.7 = 680, 3.5 = 1400, 4.5 = 1800 (NeoSum = home + away).
+export function neoParts400(hsH: number, hcH: number, asH: number, acH: number): { home: number; away: number } {
   return {
-    home: awayPart > 0 && homePart >= 2 * awayPart,
-    away: homePart > 0 && awayPart >= 2 * homePart,
+    home: Math.max(hsH, acH) + 3 * Math.min(hsH, acH),
+    away: Math.max(asH, hcH) + 3 * Math.min(asH, hcH),
   };
 }
 
-// GG + OVER 2.5 test on the NEW SCORE parts, exact integer maths, averages in hundredths.
-//   The parts are in 1/400 (see boomQualifies), so 1.7 = 680 and 3.5 = 1400.
-//   Qualifies when Home part >= 1.7, Away part >= 1.7 and Home + Away >= 3.5 (all included).
+// 💥 test on the Neo parts, exact integer maths, averages in hundredths.
+//   Home side: Neo Home / Neo Away >= 2, and needs Neo Away > 0.
+//   Away side: Neo Away / Neo Home >= 2, and needs Neo Home > 0.
+export function boomQualifies(hsH: number, hcH: number, asH: number, acH: number): { home: boolean; away: boolean } {
+  const n = neoParts400(hsH, hcH, asH, acH);
+  return {
+    home: n.away > 0 && n.home >= 2 * n.away,
+    away: n.home > 0 && n.away >= 2 * n.home,
+  };
+}
+
+// GG + OVER 2.5 test on the Neo parts, exact integer maths, averages in hundredths.
+//   Qualifies when Neo Home >= 1.7, Neo Away >= 1.7 and NeoSum >= 3.5 (all included).
+//   In 1/400: 1.7 = 680 and 3.5 = 1400.
 export function ggOverQualifies(hsH: number, hcH: number, asH: number, acH: number): boolean {
-  const homePart = Math.max(hsH, acH) + 3 * Math.min(hsH, acH);
-  const awayPart = Math.max(asH, hcH) + 3 * Math.min(asH, hcH);
-  return homePart >= 680 && awayPart >= 680 && homePart + awayPart >= 1400;
+  const n = neoParts400(hsH, hcH, asH, acH);
+  return n.home >= 680 && n.away >= 680 && n.home + n.away >= 1400;
 }
 
 // P = 100 * sqrt(A*B) / (1 + sqrt(A*B)). null when A*B is not usable.
@@ -250,7 +260,7 @@ type RxItem = {
   rx: number;
   tick: boolean;
   star: boolean;
-  boom: boolean; // 💥: the NEW SCORE rate (Home/Away or Away/Home) is 2 or more
+  boom: boolean; // 💥: the Neo rate (Neo Home/Neo Away or Neo Away/Neo Home) is 2 or more
   heart: boolean; // not used for the heart symbol any more (T decides it), kept as it was
   heartRate: number | null; // the heart rate (null = no heart result), the b value used by T
   line: string;
@@ -269,9 +279,9 @@ type DrawEntry = {
 };
 type GgEntry = {
   label: string;
-  home: number; // NEW SCORE Home part
-  away: number; // NEW SCORE Away part
-  sum: number; // Home + Away
+  home: number; // Neo Home
+  away: number; // Neo Away
+  sum: number; // NeoSum
   extra: string;
   order: number;
 };
@@ -284,7 +294,7 @@ type OverItem = {
   score: number;
   score2: number;
   fH: number; // f = Score 2 * total scored, in hundredths
-  p: number | null; // P from f and the new score (null = not usable)
+  p: number | null; // P from f and NeoSum (null = not usable)
   extra: string;
   order: number;
 };
@@ -409,7 +419,7 @@ function rankedEntries(sides: Side[]): string[] {
 
 // The RX 2+ section: one descending list, highest rx first.
 // Check mark when D2 >= 3. Star when the side's X:Y number is bigger than its opponent's.
-// 💥 when the NEW SCORE rate is 2 or more (symbol only).
+// 💥 when the Neo rate is 2 or more (symbol only).
 // Every side with a heart rate shows T in brackets (T from rx and the heart rate), and the
 // heart only when T is 60 or more (60 included). No heart result = no brackets, no heart.
 function rxMessages(title: string, items: RxItem[]): string[] {
@@ -447,8 +457,8 @@ function drawMessages(title: string, draws: DrawEntry[]): string[] {
   return pack(header, entries, '');
 }
 
-// The GG + OVER 2.5 section (football only): highest Home + Away first.
-// The number in brackets is Home + Away (NEW SCORE parts).
+// The GG + OVER 2.5 section (football only): highest NeoSum first.
+// The number in brackets is NeoSum (Neo Home + Neo Away).
 function ggMessages(title: string, items: GgEntry[]): string[] {
   const header = 'GG + OVER 2.5 - ' + title + ' (' + items.length + ')';
   if (items.length === 0) return [header + '\nNone'];

@@ -8,21 +8,24 @@
 //   HEART: RX 2+ sides whose T (trust) was 60 or more (60 included), the same rule as the ranking
 //   list. Reports how often heart sides won, how often sides with BOTH star and heart won, and
 //   sides without a heart for comparison (including sides with no heart result).
-//   BOOM (💥): RX 2+ sides whose NEW SCORE rate was 2 or more (2 included), the same rule as the
-//   ranking list (boomQualifies). Home side: NEW SCORE Home / NEW SCORE Away. Away side:
-//   NEW SCORE Away / NEW SCORE Home. Reports how often 💥 sides won (the accuracy), and how often
+//   BOOM (💥): RX 2+ sides whose Neo rate was 2 or more (2 included), the same rule as the
+//   ranking list (boomQualifies). Home side: Neo Home / Neo Away. Away side:
+//   Neo Away / Neo Home. Reports how often 💥 sides won (the accuracy), and how often
 //   sides with star, heart AND 💥 together won.
 //   TRUST: tracked on its own, not decided by the star or the heart. Every RX 2+ side that has a
 //   heart rate gets T (trustT from rx and the heart rate). Reports how often the sides with
 //   T of 60 or more (60 included) won.
 //   DRAW: matches in the Draw list, difference |Home point - Away point|; hit = ended level.
-//   GG + OVER 2.5: matches in the GG + Over 2.5 list of the ranking (ggOverQualifies: NEW SCORE
-//   Home 1.7+, Away 1.7+, Home + Away 3.5+). Hit = both teams scored (1+ goal each) AND 3 or more
+//   GG + OVER 2.5: matches in the GG + Over 2.5 list of the ranking (ggOverQualifies: Neo
+//   Home 1.7+, Neo Away 1.7+, NeoSum 3.5+). Hit = both teams scored (1+ goal each) AND 3 or more
 //   goals. Also reports, for the same matches, how often both teams scored (GG alone) and how
 //   often they went Over 2.5 alone.
+//   NEOSUM 4.5+: matches with NeoSum (Neo Home + Neo Away) of 4.5 or more (4.5 included, exact
+//   integer maths via neoParts400). Reports how often they produced Over 3.5 (4+ goals).
 //   OVER: Score, Score 2, Value 1, Value 2 (rate x score); hit = 3 or more goals.
-//   OVER P: new score = Home + Away, Home = (1/4)*max(hs,ac) + (3/4)*min(hs,ac),
-//   Away = (1/4)*max(as,hc) + (3/4)*min(as,hc). A = f (2 decimals), B = new score,
+//   OVER P: Neo Home = (1/4)*max(hs,ac) + (3/4)*min(hs,ac),
+//   Neo Away = (1/4)*max(as,hc) + (3/4)*min(as,hc), NeoSum = Neo Home + Neo Away.
+//   A = f (2 decimals), B = NeoSum,
 //   P = 100 * sqrt(A*B) / (1 + sqrt(A*B)). Tracked only.
 //   P 80+ -> how often Over 3.5 (4+ goals) and how often Over 2.5 (3+ goals).
 //   P 70+ -> how often Over 2.5 (3+ goals).
@@ -45,6 +48,7 @@ import {
   rxQualifies,
   boomQualifies,
   ggOverQualifies,
+  neoParts400,
   isDraw,
   fHundredths,
   hHundredths,
@@ -65,7 +69,7 @@ function hundredths(n: number): number {
   return Math.round(round2(n) * 100);
 }
 
-// New score for OVER P: Home + Away, each = (1/4)*max + (3/4)*min.
+// NeoSum for OVER P: Neo Home + Neo Away, each = (1/4)*max + (3/4)*min.
 function newScore(hs: number, hc: number, as: number, ac: number): number {
   const home = 0.25 * Math.max(hs, ac) + 0.75 * Math.min(hs, ac);
   const away = 0.25 * Math.max(as, hc) + 0.75 * Math.min(as, hc);
@@ -260,7 +264,7 @@ function fpct(hits: number, n: number): string {
   return n > 0 ? Math.round((hits * 100) / n) + '% (' + hits + ' of ' + n + ')' : '-';
 }
 
-// Win counter for RX sides (star, heart, both, none, trust, boom). Also used for the OVER P counters.
+// Win counter for RX sides (star, heart, both, none, trust, boom). Also used for the GG, NeoSum and OVER P counters.
 type WinCount = { n: number; won: number };
 const newWin = (): WinCount => ({ n: 0, won: 0 });
 function addWin(w: WinCount, won: boolean) {
@@ -301,12 +305,13 @@ export async function trackMessages(
     const heartSides = newWin();
     const noHeartSides = newWin();
     const starHeartSides = newWin();
-    const boomSides = newWin(); // RX 2+ sides with 💥 (NEW SCORE rate 2+)
+    const boomSides = newWin(); // RX 2+ sides with 💥 (Neo rate 2+)
     const starHeartBoomSides = newWin(); // RX 2+ sides with ⭐, ❤️ and 💥 together
     const trustSides = newWin();
     const ggBoth = newWin(); // GG + Over 2.5 list: both teams scored AND 3+ goals
     const ggOnly = newWin(); // same matches: both teams scored
     const ggOver25 = newWin(); // same matches: 3+ goals
+    const neoSum45Over35 = newWin(); // NeoSum 4.5+ -> Over 3.5 (4+ goals)
     const pOver35 = newWin(); // P 80+ -> Over 3.5
     const p80Over25 = newWin(); // P 80+ -> Over 2.5
     const pOver25 = newWin(); // P 70+ -> Over 2.5
@@ -342,7 +347,7 @@ export async function trackMessages(
       if (q.away) addTo(rxAcc, ap / hp, awayWon);
 
       // Star, heart, 💥 and trust for RX 2+ sides. The heart is T of 60 or more (60 included),
-      // the same rule as the ranking list. 💥 is the NEW SCORE rate of 2 or more (boomQualifies).
+      // the same rule as the ranking list. 💥 is the Neo rate of 2 or more (boomQualifies).
       // Trust is also counted on its own.
       if (q.home || q.away) {
         const xy = score2Xy(hsH, hcH, asH, acH);
@@ -394,6 +399,12 @@ export async function trackMessages(
         addWin(ggOver25, over);
       }
 
+      // NEOSUM 4.5+ -> Over 3.5. NeoSum in 1/400 (exact integers): 4.5 = 1800, 4.5 included.
+      const neo = neoParts400(hsH, hcH, asH, acH);
+      if (neo.home + neo.away >= 1800) {
+        addWin(neoSum45Over35, goals >= 4);
+      }
+
       const sc1 = overScore(hs, hc, as, ac);
       const sc2 = overScore2(hs, hc, as, ac);
       addTo(s1, sc1, over);
@@ -406,7 +417,7 @@ export async function trackMessages(
 
       const fH = fHundredths(hs, hc, as, ac);
 
-      // OVER P: A = f (2 decimals), B = new score.
+      // OVER P: A = f (2 decimals), B = NeoSum.
       // P 80+ -> Over 3.5 and Over 2.5. P 70+ -> Over 2.5. P 70+ and f 4+ -> Over 3.5 and Over 2.5.
       const overP = pValue(fH / 100, newScore(hs, hc, as, ac));
       if (overP !== null) {
@@ -485,6 +496,10 @@ export async function trackMessages(
     out.push('  GG alone (both scored): ' + fpct(ggOnly.won, ggOnly.n));
     out.push('  Over 2.5 alone: ' + fpct(ggOver25.won, ggOver25.n));
     out.push('');
+    out.push('NEOSUM 4.5+ (NeoSum = Neo Home + Neo Away)');
+    out.push('NeoSum 4.5+ : ' + neoSum45Over35.n + ' matches');
+    out.push('  Over 3.5: ' + fpct(neoSum45Over35.won, neoSum45Over35.n));
+    out.push('');
     out.push('OVER 2.5 (3 or more goals)');
     out.push('Matches: ' + matches + ', went over ' + overCount + ' (' + Math.round((overCount * 100) / matches) + '%)');
     out.push(line('Score  ', s1, 'over', 'not over'));
@@ -507,7 +522,7 @@ export async function trackMessages(
     out.push('  Over 2.5: ' + fpct(hBand.o25, hBand.n));
     out.push('  Over 3.5: ' + fpct(hBand.o35, hBand.n));
     out.push('');
-    out.push('OVER P (P from f and the new score)');
+    out.push('OVER P (P from f and NeoSum)');
     out.push('P 80+ : ' + pOver35.n + ' matches');
     out.push('  Over 3.5: ' + fpct(pOver35.won, pOver35.n));
     out.push('  Over 2.5: ' + fpct(p80Over25.won, p80Over25.n));
@@ -519,8 +534,9 @@ export async function trackMessages(
     out.push('');
     out.push('Lift = winners avg / (winners avg + others avg) x 100. 50 = no difference. Above 60 = the winners score clearly higher than the others.');
     out.push('Draw: a draw has a SMALL difference, so a lift below 50 is the good sign there.');
-    out.push('⭐ = the side X:Y number was bigger than its opponent. ❤️ = T (trust) was 60 or more. 💥 = the NEW SCORE rate (Home/Away for a home side, Away/Home for an away side) was 2 or more. A draw counts as not winning.');
-    out.push('GG + Over 2.5 list = NEW SCORE Home 1.7+, Away 1.7+ and Home + Away 3.5+. GG = both teams scored at least 1 goal.');
+    out.push('⭐ = the side X:Y number was bigger than its opponent. ❤️ = T (trust) was 60 or more. 💥 = the Neo rate (Neo Home/Neo Away for a home side, Neo Away/Neo Home for an away side) was 2 or more. A draw counts as not winning.');
+    out.push('GG + Over 2.5 list = Neo Home 1.7+, Neo Away 1.7+ and NeoSum 3.5+. GG = both teams scored at least 1 goal.');
+    out.push('NeoSum 4.5+ = Neo Home + Neo Away of 4.5 or more (4.5 included).');
     out.push('Over 1.5 = 2+ goals, Over 2.5 = 3+ goals, Over 3.5 = 4+ goals.');
     out.push('OVER P groups overlap: a match with P 80+ is also counted in P 70+.');
     out.push('Averages of matches that already finished. No accuracy is promised.');
