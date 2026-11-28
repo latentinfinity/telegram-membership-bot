@@ -43,6 +43,8 @@
 //   NeoSum = Neo Home + Neo Away. (In the code: newScoreParts = the two Neo parts,
 //   newScore = NeoSum, neoParts400 = the two Neo parts as exact integers in 1/400.)
 // P = 100 * sqrt(A*B) / (1 + sqrt(A*B)), A = f (2 decimals), B = NeoSum.
+// Q = the same formula as P (qValue), with A = t (home scored + away scored) and
+//   B = total conceded (home conceded + away conceded).
 // h = f * g, g = smaller conceded / bigger conceded (home conceded vs away conceded; both 0 = no g),
 //   h rounded to 2 decimals (hHundredths).
 // FOOTBALL OVER RANKING (main list): every match with f of 2.00 or more, ranked by f, highest first.
@@ -53,17 +55,24 @@
 // There are no top 10 lists any more.
 // FOOTBALL h LIST (after the main list): matches with f 3.00 or more and h 3.00 or more.
 //   Ranked by h, highest first (descending). The number in brackets is h.
+// FOOTBALL P+Q h LISTS (right after the h list, football only): two lists, one for the matches
+//   with f from 4.00 to 4.99 and one for f from 3.00 to 3.99 (both ends included). Each match
+//   gets the average (P + Q) / 2, the list is ranked by it, highest first, and only the top 12
+//   are shown (all of them when there are fewer than 12). A match with no P or no Q is left out.
+//   The number in brackets is the average, with P and Q underneath.
+//   DQ (data quality) is in the heading of each list: the P formula with A = the biggest f
+//   and B = the smallest f among the matches shown in that list (the top 12 only).
 // BASKETBALL h LIST (after the basketball main list): ALL matches (no 3+ cut), ranked by h,
 //   highest first. A match with both conceded averages 0 has no g and is left out.
 // BASKETBALL (pasted matches only): the word Basketball on the first line of the paste marks
 //   every match in it as basketball (the stored league starts with "Basketball"). Basketball
 //   gets the same WIN ranking and RX 2+ (with the D2 tick, the X:Y star, the 💥 and the heart),
-//   NO Draw, NO GG + Over 2.5, and its Over lists.
+//   NO Draw, NO GG + Over 2.5, NO P+Q h lists, and its Over lists.
 // Part 1: one competition's stored pending matches (fd_fixtures). Football only.
 // Part 2: the matches pasted into the storage (one list across all leagues).
 // Exported for lib/fd/track.ts and lib/fd/scoreXY.ts: isDraw, rxQualifies, overRate, the score
-// functions, fHundredths, hHundredths, heartRates, score2Xy, boomQualifies, ggOverQualifies
-// and neoParts400.
+// functions, fHundredths, hHundredths, heartRates, score2Xy, boomQualifies, ggOverQualifies,
+// neoParts400 and qValue.
 import { createAdminClient } from '@/lib/supabase/admin';
 
 const LIMIT = 3500;
@@ -153,6 +162,12 @@ export function pValue(a: number, b: number): number | null {
   const s = Math.sqrt(ab);
   const p = (100 * s) / (1 + s);
   return isFinite(p) ? p : null;
+}
+
+// Q = the same formula as P, with A = t (home scored + away scored, 2 decimals) and
+// B = total conceded (home conceded + away conceded, 2 decimals). null when not usable.
+export function qValue(totalScored: number, totalConceded: number): number | null {
+  return pValue(totalScored, totalConceded);
 }
 
 // Star for the football main list. fH = f in hundredths.
@@ -512,6 +527,49 @@ function hListMessages(title: string, items: OverItem[]): string[] {
   return pack(header, entries, footer);
 }
 
+// A P+Q h LIST for one f band (football only). loH and hiH = the band in hundredths of f,
+// both included (400 to 499, or 300 to 399). Each match gets (P + Q) / 2, ranked highest first,
+// top 12 only. A match with no P or no Q is left out. DQ is in the heading: the P formula with
+// A = the biggest f and B = the smallest f among the matches shown (the top 12 only).
+const PQ_TOP = 12;
+function pqListMessages(title: string, items: OverItem[], loH: number, hiH: number, band: string): string[] {
+  const rows: { m: OverItem; p: number; q: number; avg: number }[] = [];
+  let inBand = 0;
+  items.forEach((m) => {
+    if (m.fH < loH || m.fH > hiH) return;
+    inBand++;
+    if (m.p === null) return;
+    const q = qValue(m.tHundredths / 100, m.concedeH / 100);
+    if (q === null) return;
+    rows.push({ m, p: m.p, q, avg: (m.p + q) / 2 });
+  });
+  rows.sort((a, b) => b.avg - a.avg || a.m.order - b.m.order);
+  const shown = rows.slice(0, PQ_TOP);
+  let header = 'OVER h LIST (P+Q) f ' + band + ' - ' + title + ' (' + shown.length + ')';
+  if (shown.length === 0) return [header + '\nNone'];
+
+  let big = shown[0].m.fH;
+  let small = shown[0].m.fH;
+  shown.forEach((x) => {
+    if (x.m.fH > big) big = x.m.fH;
+    if (x.m.fH < small) small = x.m.fH;
+  });
+  const dq = pValue(big / 100, small / 100);
+  header += ' | dq ' + (dq !== null ? dq.toFixed(1) : '-');
+
+  const footer =
+    'Matches with f ' + band + ': ' + inBand + '. Shown: ' + shown.length + ' (top ' + PQ_TOP + ').\n' +
+    'Ranked by (P + Q) / 2. Q = P formula with t and total conceded. dq = P formula with the biggest f (' +
+    (big / 100).toFixed(2) + ') and the smallest f (' + (small / 100).toFixed(2) + ') of the list.';
+  const entries = shown.map(
+    (x, i) =>
+      i + 1 + ') ' + x.m.name + ' (' + x.avg.toFixed(1) + ')' +
+      '\nP ' + x.p.toFixed(1) + ' | Q ' + x.q.toFixed(1) + ' | f ' + (x.m.fH / 100).toFixed(2) +
+      (x.m.extra ? '\n' + x.m.extra : '')
+  );
+  return pack(header, entries, footer);
+}
+
 // The basketball h LIST, after the basketball main list.
 //   ALL matches (no 3+ cut), h = f * g, highest h first. No g (both conceded 0) = left out.
 function hListBasketMessages(title: string, items: OverItem[]): string[] {
@@ -544,7 +602,7 @@ function hListBasketMessages(title: string, items: OverItem[]): string[] {
 
 // The football OVER RANKING: ranked by f (Score 2 x total scored), highest first.
 // Matches with f below 2.00 are removed. The brackets are (f)(P), then a star by the star rule.
-// Then the h list.
+// Then the h list, then the two P+Q h lists (f 4.00 to 4.99, f 3.00 to 3.99).
 function overMessages(title: string, items: OverItem[]): string[] {
   if (items.length === 0) return ['OVER RANKING (f, highest first) - ' + title + ' (0)\nNone'];
 
@@ -568,7 +626,10 @@ function overMessages(title: string, items: OverItem[]): string[] {
     );
     first = pack(header, entries, footer);
   }
-  return first.concat(hListMessages(title, items));
+  return first
+    .concat(hListMessages(title, items))
+    .concat(pqListMessages(title, items, 400, 499, '4.00-4.99'))
+    .concat(pqListMessages(title, items, 300, 399, '3.00-3.99'));
 }
 
 // The basketball OVER RANKING: one single list, highest Score first, then the h list.
