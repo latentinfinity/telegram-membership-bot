@@ -12,6 +12,10 @@
 //   A side gets a check mark when D2 >= 3 (3 included).
 //   A side gets a star when its own X:Y number (score 2 x average scored, rounded half up)
 //   is bigger than its opponent's. A tie gets no star.
+//   A side gets a 💥 when its NEW SCORE rate is 2 or more (2 included). The rate uses the two
+//   parts of the NEW SCORE (see below): Home side: rate = NEW SCORE Home / NEW SCORE Away.
+//   Away side: rate = NEW SCORE Away / NEW SCORE Home. If the opposing part is 0 there is no
+//   rate and no 💥. Exact integer maths. Only the symbol is shown, not the number.
 //   A side gets a heart only when its T (TRUST, below) is 60 or more (60 included).
 //   The heart rate no longer decides the heart.
 //   TRUST (T): every RX 2+ side that has a heart rate (see HEART FORMULA) shows T in brackets,
@@ -47,12 +51,12 @@
 //   highest first. A match with both conceded averages 0 has no g and is left out.
 // BASKETBALL (pasted matches only): the word Basketball on the first line of the paste marks
 //   every match in it as basketball (the stored league starts with "Basketball"). Basketball
-//   gets the same WIN ranking and RX 2+ (with the D2 tick, the X:Y star and the heart), NO Draw,
-//   and its Over lists.
+//   gets the same WIN ranking and RX 2+ (with the D2 tick, the X:Y star, the 💥 and the heart),
+//   NO Draw, and its Over lists.
 // Part 1: one competition's stored pending matches (fd_fixtures). Football only.
 // Part 2: the matches pasted into the storage (one list across all leagues).
 // Exported for lib/fd/track.ts and lib/fd/scoreXY.ts: isDraw, rxQualifies, overRate, the score
-// functions, fHundredths, hHundredths, heartRates and score2Xy.
+// functions, fHundredths, hHundredths, heartRates, score2Xy and boomQualifies.
 import { createAdminClient } from '@/lib/supabase/admin';
 
 const LIMIT = 3500;
@@ -92,11 +96,31 @@ export function hHundredths(fH: number, hcH: number, acH: number): number | null
   return Math.floor((2 * fH * small + big) / (2 * big));
 }
 
-// NEW SCORE for P: Home + Away, each = (1/4)*max + (3/4)*min.
-export function newScore(hs: number, hc: number, as: number, ac: number): number {
+// The two parts of the NEW SCORE: Home = (1/4)*max(hs,ac) + (3/4)*min(hs,ac),
+// Away = (1/4)*max(as,hc) + (3/4)*min(as,hc).
+export function newScoreParts(hs: number, hc: number, as: number, ac: number): { home: number; away: number } {
   const home = 0.25 * Math.max(hs, ac) + 0.75 * Math.min(hs, ac);
   const away = 0.25 * Math.max(as, hc) + 0.75 * Math.min(as, hc);
-  return home + away;
+  return { home, away };
+}
+
+// NEW SCORE for P: Home + Away, each = (1/4)*max + (3/4)*min.
+export function newScore(hs: number, hc: number, as: number, ac: number): number {
+  const parts = newScoreParts(hs, hc, as, ac);
+  return parts.home + parts.away;
+}
+
+// 💥 test on the NEW SCORE parts, exact integer maths, averages in hundredths.
+//   Home part (in 1/400) = max(hsH,acH) + 3*min(hsH,acH); Away part = max(asH,hcH) + 3*min(asH,hcH).
+//   Home side: Home part / Away part >= 2, and needs Away part > 0.
+//   Away side: Away part / Home part >= 2, and needs Home part > 0.
+export function boomQualifies(hsH: number, hcH: number, asH: number, acH: number): { home: boolean; away: boolean } {
+  const homePart = Math.max(hsH, acH) + 3 * Math.min(hsH, acH);
+  const awayPart = Math.max(asH, hcH) + 3 * Math.min(asH, hcH);
+  return {
+    home: awayPart > 0 && homePart >= 2 * awayPart,
+    away: homePart > 0 && awayPart >= 2 * homePart,
+  };
 }
 
 // P = 100 * sqrt(A*B) / (1 + sqrt(A*B)). null when A*B is not usable.
@@ -213,6 +237,7 @@ type RxItem = {
   rx: number;
   tick: boolean;
   star: boolean;
+  boom: boolean; // 💥: the NEW SCORE rate (Home/Away or Away/Home) is 2 or more
   heart: boolean; // not used for the heart symbol any more (T decides it), kept as it was
   heartRate: number | null; // the heart rate (null = no heart result), the b value used by T
   line: string;
@@ -363,6 +388,7 @@ function rankedEntries(sides: Side[]): string[] {
 
 // The RX 2+ section: one descending list, highest rx first.
 // Check mark when D2 >= 3. Star when the side's X:Y number is bigger than its opponent's.
+// 💥 when the NEW SCORE rate is 2 or more (symbol only).
 // Every side with a heart rate shows T in brackets (T from rx and the heart rate), and the
 // heart only when T is 60 or more (60 included). No heart result = no brackets, no heart.
 function rxMessages(title: string, items: RxItem[]): string[] {
@@ -378,7 +404,7 @@ function rxMessages(title: string, items: RxItem[]): string[] {
       }
     }
     return (
-      i + 1 + ') ' + x.team + (x.tick ? ' ✅' : '') + (x.star ? ' ⭐' : '') + heartPart +
+      i + 1 + ') ' + x.team + (x.tick ? ' ✅' : '') + (x.star ? ' ⭐' : '') + (x.boom ? ' 💥' : '') + heartPart +
       '   rx ' + x.rx.toFixed(3) +
       '\n' + x.line + (x.extra ? '\n' + x.extra : '')
     );
@@ -627,11 +653,12 @@ export async function rankCompetition(
       const rxTick = sup !== null && sup.big;
       const xy = score2Xy(hsH, hcH, asH, acH);
       const hr = heartRates(hsH, hcH, asH, acH);
+      const bm = boomQualifies(hsH, hcH, asH, acH);
       if (q.home) {
-        rxItems.push({ team: r.home_name, rx: hp / ap, tick: rxTick, star: xy.x > xy.y, heart: hr !== null && hr.home, heartRate: hr !== null ? hr.rateHome : null, line: 'Home vs ' + r.away_name, extra: when, order: i * 2 });
+        rxItems.push({ team: r.home_name, rx: hp / ap, tick: rxTick, star: xy.x > xy.y, boom: bm.home, heart: hr !== null && hr.home, heartRate: hr !== null ? hr.rateHome : null, line: 'Home vs ' + r.away_name, extra: when, order: i * 2 });
       }
       if (q.away) {
-        rxItems.push({ team: r.away_name, rx: ap / hp, tick: rxTick, star: xy.y > xy.x, heart: hr !== null && hr.away, heartRate: hr !== null ? hr.rateAway : null, line: 'Away at ' + r.home_name, extra: when, order: i * 2 + 1 });
+        rxItems.push({ team: r.away_name, rx: ap / hp, tick: rxTick, star: xy.y > xy.x, boom: bm.away, heart: hr !== null && hr.away, heartRate: hr !== null ? hr.rateAway : null, line: 'Away at ' + r.home_name, extra: when, order: i * 2 + 1 });
       }
       if (isDraw(hsH, hcH, asH, acH)) {
         const info = drawInfo(hsH, hcH, asH, acH);
@@ -747,11 +774,12 @@ function rankPastedGroup(rows: PastedRow[], basketball: boolean): string[] {
     const rxTick = sup !== null && sup.big;
     const xy = score2Xy(hsH, hcH, asH, acH);
     const hr = heartRates(hsH, hcH, asH, acH);
+    const bm = boomQualifies(hsH, hcH, asH, acH);
     if (q.home) {
-      rxItems.push({ team: homeName, rx: hp / ap, tick: rxTick, star: xy.x > xy.y, heart: hr !== null && hr.home, heartRate: hr !== null ? hr.rateHome : null, line: 'Home vs ' + awayName, extra: league, order: i * 2 });
+      rxItems.push({ team: homeName, rx: hp / ap, tick: rxTick, star: xy.x > xy.y, boom: bm.home, heart: hr !== null && hr.home, heartRate: hr !== null ? hr.rateHome : null, line: 'Home vs ' + awayName, extra: league, order: i * 2 });
     }
     if (q.away) {
-      rxItems.push({ team: awayName, rx: ap / hp, tick: rxTick, star: xy.y > xy.x, heart: hr !== null && hr.away, heartRate: hr !== null ? hr.rateAway : null, line: 'Away at ' + homeName, extra: league, order: i * 2 + 1 });
+      rxItems.push({ team: awayName, rx: ap / hp, tick: rxTick, star: xy.y > xy.x, boom: bm.away, heart: hr !== null && hr.away, heartRate: hr !== null ? hr.rateAway : null, line: 'Away at ' + homeName, extra: league, order: i * 2 + 1 });
     }
     if (!basketball && isDraw(hsH, hcH, asH, acH)) {
       const info = drawInfo(hsH, hcH, asH, acH);

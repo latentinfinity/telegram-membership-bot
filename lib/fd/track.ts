@@ -8,6 +8,10 @@
 //   HEART: RX 2+ sides whose T (trust) was 60 or more (60 included), the same rule as the ranking
 //   list. Reports how often heart sides won, how often sides with BOTH star and heart won, and
 //   sides without a heart for comparison (including sides with no heart result).
+//   BOOM (💥): RX 2+ sides whose NEW SCORE rate was 2 or more (2 included), the same rule as the
+//   ranking list (boomQualifies). Home side: NEW SCORE Home / NEW SCORE Away. Away side:
+//   NEW SCORE Away / NEW SCORE Home. Reports how often 💥 sides won (the accuracy), and how often
+//   sides with star, heart AND 💥 together won.
 //   TRUST: tracked on its own, not decided by the star or the heart. Every RX 2+ side that has a
 //   heart rate gets T (trustT from rx and the heart rate). Reports how often the sides with
 //   T of 60 or more (60 included) won.
@@ -35,6 +39,7 @@ import {
   overScore2,
   overRate,
   rxQualifies,
+  boomQualifies,
   isDraw,
   fHundredths,
   hHundredths,
@@ -250,7 +255,7 @@ function fpct(hits: number, n: number): string {
   return n > 0 ? Math.round((hits * 100) / n) + '% (' + hits + ' of ' + n + ')' : '-';
 }
 
-// Win counter for RX sides (star, heart, both, none, trust). Also used for the OVER P counters.
+// Win counter for RX sides (star, heart, both, none, trust, boom). Also used for the OVER P counters.
 type WinCount = { n: number; won: number };
 const newWin = (): WinCount => ({ n: 0, won: 0 });
 function addWin(w: WinCount, won: boolean) {
@@ -291,6 +296,8 @@ export async function trackMessages(
     const heartSides = newWin();
     const noHeartSides = newWin();
     const starHeartSides = newWin();
+    const boomSides = newWin(); // RX 2+ sides with 💥 (NEW SCORE rate 2+)
+    const starHeartBoomSides = newWin(); // RX 2+ sides with ⭐, ❤️ and 💥 together
     const trustSides = newWin();
     const pOver35 = newWin(); // P 80+ -> Over 3.5
     const p80Over25 = newWin(); // P 80+ -> Over 2.5
@@ -326,27 +333,35 @@ export async function trackMessages(
       if (q.home) addTo(rxAcc, hp / ap, homeWon);
       if (q.away) addTo(rxAcc, ap / hp, awayWon);
 
-      // Star, heart and trust for RX 2+ sides. The heart is T of 60 or more (60 included),
-      // the same rule as the ranking list. Trust is also counted on its own.
+      // Star, heart, 💥 and trust for RX 2+ sides. The heart is T of 60 or more (60 included),
+      // the same rule as the ranking list. 💥 is the NEW SCORE rate of 2 or more (boomQualifies).
+      // Trust is also counted on its own.
       if (q.home || q.away) {
         const xy = score2Xy(hsH, hcH, asH, acH);
         const hr = heartRates(hsH, hcH, asH, acH);
+        const bm = boomQualifies(hsH, hcH, asH, acH);
         if (q.home) {
           const t = hr !== null ? trustT(hp / ap, hr.rateHome) : null;
           const star = xy.x > xy.y;
           const heart = t !== null && t >= 60;
+          const boom = bm.home;
           addWin(star ? starSides : noStarSides, homeWon);
           addWin(heart ? heartSides : noHeartSides, homeWon);
           if (star && heart) addWin(starHeartSides, homeWon);
+          if (boom) addWin(boomSides, homeWon);
+          if (star && heart && boom) addWin(starHeartBoomSides, homeWon);
           if (t !== null && t >= 60) addWin(trustSides, homeWon);
         }
         if (q.away) {
           const t = hr !== null ? trustT(ap / hp, hr.rateAway) : null;
           const star = xy.y > xy.x;
           const heart = t !== null && t >= 60;
+          const boom = bm.away;
           addWin(star ? starSides : noStarSides, awayWon);
           addWin(heart ? heartSides : noHeartSides, awayWon);
           if (star && heart) addWin(starHeartSides, awayWon);
+          if (boom) addWin(boomSides, awayWon);
+          if (star && heart && boom) addWin(starHeartBoomSides, awayWon);
           if (t !== null && t >= 60) addWin(trustSides, awayWon);
         }
       }
@@ -436,6 +451,8 @@ export async function trackMessages(
     out.push('RX 2+ with ❤️: ' + heartSides.n + ' sides, won ' + fpct(heartSides.won, heartSides.n));
     out.push('RX 2+ with ⭐ and ❤️: ' + starHeartSides.n + ' sides, won ' + fpct(starHeartSides.won, starHeartSides.n));
     out.push('RX 2+ without ❤️: ' + noHeartSides.n + ' sides, won ' + fpct(noHeartSides.won, noHeartSides.n));
+    out.push('RX 2+ with 💥: ' + boomSides.n + ' sides, won ' + fpct(boomSides.won, boomSides.n));
+    out.push('RX 2+ with ⭐, ❤️ and 💥: ' + starHeartBoomSides.n + ' sides, won ' + fpct(starHeartBoomSides.won, starHeartBoomSides.n));
     out.push('');
     out.push('TRUST (T, on its own: any RX 2+ side with a heart rate, with or without ⭐ or ❤️)');
     out.push('RX 2+ with T 60+: ' + trustSides.n + ' sides, won ' + fpct(trustSides.won, trustSides.n));
@@ -478,7 +495,7 @@ export async function trackMessages(
     out.push('');
     out.push('Lift = winners avg / (winners avg + others avg) x 100. 50 = no difference. Above 60 = the winners score clearly higher than the others.');
     out.push('Draw: a draw has a SMALL difference, so a lift below 50 is the good sign there.');
-    out.push('⭐ = the side X:Y number was bigger than its opponent. ❤️ = T (trust) was 60 or more. A draw counts as not winning.');
+    out.push('⭐ = the side X:Y number was bigger than its opponent. ❤️ = T (trust) was 60 or more. 💥 = the NEW SCORE rate (Home/Away for a home side, Away/Home for an away side) was 2 or more. A draw counts as not winning.');
     out.push('Over 1.5 = 2+ goals, Over 2.5 = 3+ goals, Over 3.5 = 4+ goals.');
     out.push('OVER P groups overlap: a match with P 80+ is also counted in P 70+.');
     out.push('Averages of matches that already finished. No accuracy is promised.');
