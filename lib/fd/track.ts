@@ -24,6 +24,9 @@
 //   integer maths via neoParts400). Reports how often they produced Over 3.5 (4+ goals).
 //   NEOSUM 4+: matches with NeoSum of 4 or more (4 included, exact integer maths).
 //   Reports how often they produced Over 2.5 (3+ goals).
+//   f 4+ AND NEOSUM 4+: matches where BOTH f is 4.00 or more (4 included) AND NeoSum is 4 or
+//   more (4 included). Reports how often they produced Over 3.5 (4+ goals) and Over 2.5
+//   (3+ goals).
 //   OVER: Score, Score 2, Value 1, Value 2 (rate x score); hit = 3 or more goals.
 //   OVER P: Neo Home = (1/4)*max(hs,ac) + (3/4)*min(hs,ac),
 //   Neo Away = (1/4)*max(as,hc) + (3/4)*min(as,hc), NeoSum = Neo Home + Neo Away.
@@ -315,6 +318,8 @@ export async function trackMessages(
     const ggOver25 = newWin(); // same matches: 3+ goals
     const neoSum45Over35 = newWin(); // NeoSum 4.5+ -> Over 3.5 (4+ goals)
     const neoSum4Over25 = newWin(); // NeoSum 4+ -> Over 2.5 (3+ goals)
+    const fNeo4Over35 = newWin(); // f 4+ AND NeoSum 4+ -> Over 3.5 (4+ goals)
+    const fNeo4Over25 = newWin(); // f 4+ AND NeoSum 4+ -> Over 2.5 (3+ goals)
     const pOver35 = newWin(); // P 80+ -> Over 3.5
     const p80Over25 = newWin(); // P 80+ -> Over 2.5
     const pOver25 = newWin(); // P 70+ -> Over 2.5
@@ -402,8 +407,11 @@ export async function trackMessages(
         addWin(ggOver25, over);
       }
 
+      const fH = fHundredths(hs, hc, as, ac);
+
       // NEOSUM: NeoSum in 1/400 (exact integers). 4.5 = 1800, 4 = 1600, both included.
       // NeoSum 4.5+ -> Over 3.5 (4+ goals). NeoSum 4+ -> Over 2.5 (3+ goals).
+      // f 4+ (fH 400 or more) AND NeoSum 4+ -> Over 3.5 and Over 2.5.
       const neo = neoParts400(hsH, hcH, asH, acH);
       const neoSum400 = neo.home + neo.away;
       if (neoSum400 >= 1800) {
@@ -411,6 +419,10 @@ export async function trackMessages(
       }
       if (neoSum400 >= 1600) {
         addWin(neoSum4Over25, goals >= 3);
+        if (fH >= 400) {
+          addWin(fNeo4Over35, goals >= 4);
+          addWin(fNeo4Over25, goals >= 3);
+        }
       }
 
       const sc1 = overScore(hs, hc, as, ac);
@@ -422,8 +434,6 @@ export async function trackMessages(
         addTo(v1, rate * sc1, over);
         addTo(v2, rate * sc2, over);
       }
-
-      const fH = fHundredths(hs, hc, as, ac);
 
       // OVER P: A = f (2 decimals), B = NeoSum.
       // P 80+ -> Over 3.5 and Over 2.5. P 70+ -> Over 2.5. P 70+ and f 4+ -> Over 3.5 and Over 2.5.
@@ -509,6 +519,9 @@ export async function trackMessages(
     out.push('  Over 3.5: ' + fpct(neoSum45Over35.won, neoSum45Over35.n));
     out.push('NeoSum 4+ : ' + neoSum4Over25.n + ' matches');
     out.push('  Over 2.5: ' + fpct(neoSum4Over25.won, neoSum4Over25.n));
+    out.push('f 4+ and NeoSum 4+ (both 4 or more): ' + fNeo4Over35.n + ' matches');
+    out.push('  Over 3.5: ' + fpct(fNeo4Over35.won, fNeo4Over35.n));
+    out.push('  Over 2.5: ' + fpct(fNeo4Over25.won, fNeo4Over25.n));
     out.push('');
     out.push('OVER 2.5 (3 or more goals)');
     out.push('Matches: ' + matches + ', went over ' + overCount + ' (' + Math.round((overCount * 100) / matches) + '%)');
@@ -546,9 +559,9 @@ export async function trackMessages(
     out.push('Draw: a draw has a SMALL difference, so a lift below 50 is the good sign there.');
     out.push('⭐ = the side X:Y number was bigger than its opponent. ❤️ = T (trust) was 60 or more. 💥 = the Neo rate (Neo Home/Neo Away for a home side, Neo Away/Neo Home for an away side) was 2 or more. A draw counts as not winning.');
     out.push('GG + Over 2.5 list = Neo Home 1.7+, Neo Away 1.7+ and NeoSum 3.5+. GG = both teams scored at least 1 goal.');
-    out.push('NeoSum 4.5+ = Neo Home + Neo Away of 4.5 or more (4.5 included). NeoSum 4+ = 4 or more (4 included).');
+    out.push('NeoSum 4.5+ = Neo Home + Neo Away of 4.5 or more (4.5 included). NeoSum 4+ = 4 or more (4 included). f 4+ = f of 4.00 or more (4 included).');
     out.push('Over 1.5 = 2+ goals, Over 2.5 = 3+ goals, Over 3.5 = 4+ goals.');
-    out.push('NeoSum groups overlap: a match with NeoSum 4.5+ is also counted in NeoSum 4+. OVER P groups overlap too: a match with P 80+ is also counted in P 70+.');
+    out.push('NeoSum groups overlap: a match with NeoSum 4.5+ is also counted in NeoSum 4+, and f 4+ with NeoSum 4+ is a part of NeoSum 4+. OVER P groups overlap too: a match with P 80+ is also counted in P 70+.');
     out.push('Averages of matches that already finished. No accuracy is promised.');
     return { ok: true, messages: [out.join('\n')] };
   } catch (e) {
